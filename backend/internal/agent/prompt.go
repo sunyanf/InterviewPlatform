@@ -41,6 +41,13 @@ const (
 	// 输出 Schema：{"dimensions":{"correctness","depth","logic","communication"},"evidence":[{"question_seq","issue","evidence","reference"}],"recommendations":[]}
 	// 系统约束：只输出维度分（0-100 整数）与证据；总分由业务代码按 Rubric 权重确定性计算（AGENTS.md #15）
 	PromptEvaluator = "interview.evaluator.v1"
+
+	// PromptLearningPlanner 学习计划生成
+	// 用途：基于评估结果（维度分/证据/建议）归纳优点与不足，生成学习计划与下次训练建议
+	// 输入：岗位、面试类型、维度分、评估证据、知识缺口、评估建议、历史对比摘要
+	// 输出 Schema：{"strengths":[],"weaknesses":[],"focus_areas":[{"topic","reason","suggestions":[]}],"next_training":{"focus","suggested_question_types":[],"suggested_difficulty"}}
+	// 系统约束：只产建议内容，不计算任何分数；输入数据必须来自已验证的评估结果
+	PromptLearningPlanner = "report.learning_planner.v1"
 )
 
 // buildSystemPrompt 构造带版本号的 system prompt

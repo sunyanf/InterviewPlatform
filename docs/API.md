@@ -165,6 +165,54 @@ GET  /api/v1/evaluations                       当前用户评估列表
 
 ---
 
+# 5.7 报告（Report）
+
+需要鉴权。仅对 `COMPLETED` 且**已评估**的面试可生成报告（未评估 404 `EVALUATION_REQUIRED`）；同一会话重跑覆盖。
+
+```text
+POST /api/v1/reports/sessions/:sessionID   触发生成报告
+GET  /api/v1/reports/sessions/:sessionID   查询会话报告（未生成 404）
+GET  /api/v1/reports                       当前用户报告列表
+```
+
+数据来源与确定性边界（AGENTS.md #15）：
+
+```text
+总分 / 能力维度      → 复制评估结果（确定性）
+历史对比             → 近 5 场同类型面试评估均值 + delta（确定性计算）
+知识缺口             → 从已存储的回答分析确定性聚合去重（上限 10）
+优点 / 不足 / 学习计划 → LLM（report.learning_planner.v1，只产建议不算分）
+```
+
+响应示例（节选）：
+
+```json
+{
+  "session_id": "...",
+  "total_score": 70.75,
+  "capability_profile": {
+    "dimensions": {"correctness": 70, "depth": 60, "logic": 75, "communication": 80},
+    "total_score": 70.75,
+    "history": {
+      "compared_count": 2,
+      "avg_total_score": 65.5,
+      "avg_dimensions": {"correctness": 62.5},
+      "delta_total_score": 5.25,
+      "delta_dimensions": {"correctness": 7.5}
+    }
+  },
+  "strengths": ["..."],
+  "weaknesses": ["..."],
+  "knowledge_gaps": ["channel 关闭语义", "GMP 调度模型"],
+  "learning_plan": {
+    "focus_areas": [{"topic": "...", "reason": "...", "suggestions": ["..."]}],
+    "next_training": {"focus": "...", "suggested_question_type": "technical", "suggested_difficulty": "medium", "suggested_topics": ["..."]}
+  }
+}
+```
+
+---
+
 # 6. WebSocket
 
 ```text

@@ -69,6 +69,39 @@ func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse
 		}, nil
 	}
 
+	// 学习计划 mock 输出
+	if contains(lastMsg, "生成学习计划") {
+		mockPlan := map[string]interface{}{
+			"strengths":  []string{"goroutine 与 channel 概念表述准确", "能结合项目说明高并发手段"},
+			"weaknesses": []string{"channel 关闭与 select 机制掌握不足", "回答缺少结构化展开"},
+			"focus_areas": []map[string]interface{}{
+				{
+					"topic":       "Go 并发原语深入",
+					"reason":      "知识缺口：channel 关闭语义与 select 机制（对应 correctness 维度不足）",
+					"suggestions": []string{"阅读 Go 官方文档 channel 章节", "实现生产者-消费者练习题", "总结 select 超时与非阻塞用法"},
+				},
+				{
+					"topic":       "回答结构化表达",
+					"reason":      "communication 维度可提升：先结论后论据",
+					"suggestions": []string{"练习 STAR 法则作答", "每题先给结论再分点展开"},
+				},
+			},
+			"next_training": map[string]interface{}{
+				"focus":                   "Go 并发与 GMP 调度",
+				"suggested_question_type": "technical",
+				"suggested_difficulty":    "medium",
+				"suggested_topics":        []string{"channel 关闭语义", "GMP 调度模型", "sync 包原语"},
+			},
+		}
+		data, _ := json.Marshal(mockPlan)
+		return &ChatResponse{
+			Content:      string(data),
+			Model:        "mock",
+			InputTokens:  250,
+			OutputTokens: 220,
+		}, nil
+	}
+
 	// 整场评估 mock 输出（注意：在出题检测之前，prompt 含"评估官"不含"面试官"）
 	if contains(lastMsg, "整场问答记录进行评估") {
 		mockEvaluation := map[string]interface{}{

@@ -20,6 +20,7 @@ interview.interviewer.v1
 interview.follow_up.v1
 interview.answer_analyzer.v1
 interview.evaluator.v1（Week6：整场维度评估，只产维度分/证据/建议，总分由业务代码计算）
+report.learning_planner.v1（Week7：基于评估结果归纳优点/不足、生成学习计划与下次训练建议，不计算任何分数）
 evaluation.evaluator.v1
 learning.coach.v1
 ```

@@ -17,6 +17,7 @@ import (
 	"ai-interview-platform/internal/job"
 	"ai-interview-platform/internal/knowledge"
 	appmiddleware "ai-interview-platform/internal/middleware"
+	"ai-interview-platform/internal/report"
 	"ai-interview-platform/internal/resume"
 	"ai-interview-platform/internal/user"
 	"ai-interview-platform/pkg/embedding"
@@ -136,6 +137,11 @@ func (s *Server) routes() http.Handler {
 			r.Post("/evaluations/sessions/{sessionID}", s.evaluationHandler().Evaluate)
 			r.Get("/evaluations/sessions/{sessionID}", s.evaluationHandler().Get)
 			r.Get("/evaluations", s.evaluationHandler().List)
+
+			// 报告
+			r.Post("/reports/sessions/{sessionID}", s.reportHandler().Generate)
+			r.Get("/reports/sessions/{sessionID}", s.reportHandler().Get)
+			r.Get("/reports", s.reportHandler().List)
 		})
 	})
 
@@ -184,6 +190,14 @@ func (s *Server) evaluationHandler() *evaluation.Handler {
 	interviewRepo := interview.NewRepository(s.db)
 	svc := evaluation.NewService(evalRepo, interviewRepo, s.agent, s.log)
 	return evaluation.NewHandler(svc)
+}
+
+// reportHandler 初始化报告 Handler
+func (s *Server) reportHandler() *report.Handler {
+	evalRepo := evaluation.NewRepository(s.db)
+	interviewRepo := interview.NewRepository(s.db)
+	svc := report.NewService(report.NewRepository(s.db), evalRepo, interviewRepo, s.agent, s.log)
+	return report.NewHandler(svc)
 }
 
 // knowledgeRetriever 将 knowledge.Service 适配为 interview.KnowledgeRetriever

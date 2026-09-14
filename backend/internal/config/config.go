@@ -17,6 +17,7 @@ type Config struct {
 	Redis    RedisConfig
 	Storage  StorageConfig
 	JWT      JWTConfig
+	LLM      LLMConfig
 	Log      LogConfig
 }
 
@@ -69,6 +70,13 @@ type JWTConfig struct {
 	Issuer     string
 }
 
+type LLMConfig struct {
+	Provider string // openai / mock
+	APIKey   string
+	BaseURL  string
+	Model    string
+}
+
 type LogConfig struct {
 	Level  string // debug / info / warn / error
 	Format string // text / json
@@ -113,6 +121,12 @@ func Load() (*Config, error) {
 			Secret:     getEnv("JWT_SECRET", "change-me-in-production"),
 			ExpireTime: getEnvDuration("JWT_EXPIRE_TIME", 24*time.Hour),
 			Issuer:     getEnv("JWT_ISSUER", "ai-interview-platform"),
+		},
+		LLM: LLMConfig{
+			Provider: getEnv("LLM_PROVIDER", "mock"),
+			APIKey:   getEnv("LLM_API_KEY", ""),
+			BaseURL:  getEnv("LLM_BASE_URL", "https://api.openai.com/v1"),
+			Model:    getEnv("LLM_MODEL", "gpt-4o-mini"),
 		},
 		Log: LogConfig{
 			Level:  getEnv("LOG_LEVEL", "info"),

@@ -11,7 +11,9 @@ import (
 	"ai-interview-platform/internal/database"
 	"ai-interview-platform/internal/server"
 	"ai-interview-platform/pkg/jwt"
+	"ai-interview-platform/pkg/llm"
 	"ai-interview-platform/pkg/logger"
+	"ai-interview-platform/pkg/storage"
 )
 
 func main() {
@@ -34,11 +36,26 @@ func main() {
 	}
 	defer db.Close()
 
+	// 初始化对象存储
+	st, err := storage.NewMinIOStorage(cfg.Storage)
+	if err != nil {
+		log.Error("init storage failed", "error", err)
+		os.Exit(1)
+	}
+
+	// 初始化 LLM Provider
+	llmProv, err := llm.NewProvider(cfg.LLM)
+	if err != nil {
+		log.Error("init llm provider failed", "error", err)
+		os.Exit(1)
+	}
+	log.Info("llm provider initialized", "provider", llmProv.Name())
+
 	// 初始化 JWT
 	jwtMgr := jwt.NewManager(cfg.JWT)
 
 	// 初始化 HTTP Server
-	srv := server.New(cfg, db, log, jwtMgr)
+	srv := server.New(cfg, db, log, jwtMgr, st, llmProv)
 
 	// 启动服务（goroutine）
 	go func() {

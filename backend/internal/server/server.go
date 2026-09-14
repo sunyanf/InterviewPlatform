@@ -11,27 +11,35 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ai-interview-platform/internal/config"
+	"ai-interview-platform/internal/job"
 	appmiddleware "ai-interview-platform/internal/middleware"
+	"ai-interview-platform/internal/resume"
 	"ai-interview-platform/internal/user"
 	"ai-interview-platform/pkg/jwt"
+	"ai-interview-platform/pkg/llm"
+	"ai-interview-platform/pkg/storage"
 )
 
 // Server HTTP 服务器
 type Server struct {
-	cfg    *config.Config
-	db     *pgxpool.Pool
-	log    *slog.Logger
-	jwtMgr *jwt.Manager
-	http   *http.Server
+	cfg     *config.Config
+	db      *pgxpool.Pool
+	log     *slog.Logger
+	jwtMgr  *jwt.Manager
+	storage storage.Storage
+	llm     llm.Provider
+	http    *http.Server
 }
 
 // New 创建 Server
-func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Manager) *Server {
+func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Manager, st storage.Storage, llmProv llm.Provider) *Server {
 	s := &Server{
-		cfg:    cfg,
-		db:     db,
-		log:    log,
-		jwtMgr: jwtMgr,
+		cfg:     cfg,
+		db:      db,
+		log:     log,
+		jwtMgr:  jwtMgr,
+		storage: st,
+		llm:     llmProv,
 	}
 
 	r := s.routes()
@@ -64,10 +72,25 @@ func (s *Server) routes() http.Handler {
 		r.Post("/auth/register", s.userHandler().Register)
 		r.Post("/auth/login", s.userHandler().Login)
 
+		// 岗位公开接口
+		r.Get("/jobs/categories", s.jobHandler().ListCategories)
+		r.Get("/jobs", s.jobHandler().ListJobs)
+		r.Get("/jobs/{id}", s.jobHandler().GetJob)
+
 		// 需要鉴权的路由
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.Auth(s.jwtMgr))
 			r.Get("/me", s.userHandler().Me)
+
+			// 岗位管理
+			r.Post("/jobs", s.jobHandler().CreateJob)
+
+			// 简历
+			r.Post("/resumes", s.resumeHandler().Upload)
+			r.Get("/resumes", s.resumeHandler().List)
+			r.Get("/resumes/{id}", s.resumeHandler().Get)
+			r.Post("/resumes/{id}/parse", s.resumeHandler().Parse)
+			r.Post("/resumes/{id}/match", s.resumeHandler().Match)
 		})
 	})
 
@@ -79,6 +102,21 @@ func (s *Server) userHandler() *user.Handler {
 	repo := user.NewRepository(s.db)
 	svc := user.NewService(repo, s.jwtMgr)
 	return user.NewHandler(svc)
+}
+
+// jobHandler 初始化岗位 Handler
+func (s *Server) jobHandler() *job.Handler {
+	repo := job.NewRepository(s.db)
+	svc := job.NewService(repo, s.log)
+	return job.NewHandler(svc)
+}
+
+// resumeHandler 初始化简历 Handler
+func (s *Server) resumeHandler() *resume.Handler {
+	repo := resume.NewRepository(s.db)
+	jobRepo := job.NewRepository(s.db)
+	svc := resume.NewService(repo, s.storage, s.llm, jobRepo, s.log)
+	return resume.NewHandler(svc)
 }
 
 // Start 启动服务器

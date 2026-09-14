@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -189,16 +188,10 @@ func (r *Repository) SearchFTS(ctx context.Context, queryText, domain string, li
 	return r.scanScored(ctx, query, args)
 }
 
-// SearchKeyword 关键词检索通道（ILIKE，'simple' 不分词中文时的实用兜底）
-func (r *Repository) SearchKeyword(ctx context.Context, tokens []string, domain string, limit int) ([]scoredChunk, error) {
-	// 过滤空 token 并转小写
-	var kws []string
-	for _, t := range tokens {
-		if t = strings.ToLower(strings.TrimSpace(t)); len(t) >= 2 {
-			kws = append(kws, t)
-		}
-	}
-	if len(kws) == 0 {
+// SearchKeyword 关键词检索通道（ILIKE 语义，'simple' 不分词中文时的实用兜底）
+// keywords 由 Service 层预处理（小写、CJK 二元组扩展、去重）
+func (r *Repository) SearchKeyword(ctx context.Context, keywords []string, domain string, limit int) ([]scoredChunk, error) {
+	if len(keywords) == 0 {
 		return nil, nil
 	}
 
@@ -206,7 +199,7 @@ func (r *Repository) SearchKeyword(ctx context.Context, tokens []string, domain 
 	                 (SELECT COUNT(*) FROM unnest($1::text[]) AS t WHERE position(t IN lower(c.content)) > 0)::float AS score
 	          FROM knowledge_chunks c ` + activeDocFilter + `
 	            AND EXISTS (SELECT 1 FROM unnest($1::text[]) AS t WHERE position(t IN lower(c.content)) > 0)`
-	args := []interface{}{kws}
+	args := []interface{}{keywords}
 	if domain != "" {
 		query += ` AND c.metadata->>'domain' = $2`
 		args = append(args, domain)

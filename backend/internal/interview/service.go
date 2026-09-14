@@ -178,11 +178,14 @@ func (s *Service) Start(ctx context.Context, userID, sessionID string) (*Session
 		}
 	}
 
-	// RAG 知识检索（尽力而为：检索失败不出题不阻塞开考）
+	// RAG 知识检索（尽力而为：失败/超时降级为无知识出题，不阻塞开考）
 	var knowledgeRefs []string
 	if s.knowledge != nil {
 		knowledgeQuery := strings.Join(append([]string{j.Title}, j.Skills...), " ")
-		snippets, err := s.knowledge.RetrieveForQuery(ctx, knowledgeQuery, 5)
+		// 检索设置超时：知识检索不应无限阻塞开考
+		retrievalCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		snippets, err := s.knowledge.RetrieveForQuery(retrievalCtx, knowledgeQuery, 5)
+		cancel()
 		if err != nil {
 			s.log.Warn("knowledge retrieval failed", "session_id", sessionID, "error", err)
 		} else {

@@ -1,8 +1,12 @@
 package knowledge
 
 import (
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
+
+	"ai-interview-platform/pkg/embedding"
 )
 
 func TestChunkText_ParagraphAggregation(t *testing.T) {
@@ -127,5 +131,43 @@ func TestSplitQueryTokens(t *testing.T) {
 		if tokens[i] != want[i] {
 			t.Errorf("token[%d] = %q, want %q", i, tokens[i], want[i])
 		}
+	}
+}
+
+func TestKeywordsForSearch_CJKBigrams(t *testing.T) {
+	// "调度模型" 应拆出整词 + 二元组，使部分短语（如"调度模"）也能命中
+	kws := keywordsForSearch("Go channel 调度模型")
+	want := []string{"go", "channel", "调度模型", "调度", "度模", "模型"}
+	if len(kws) != len(want) {
+		t.Fatalf("kws = %v, want %v", kws, want)
+	}
+	for i := range want {
+		if kws[i] != want[i] {
+			t.Errorf("kw[%d] = %q, want %q", i, kws[i], want[i])
+		}
+	}
+}
+
+func TestKeywordsForSearch_DedupAndShortFilter(t *testing.T) {
+	// 单字符 ASCII 与重复关键词应被过滤/去重
+	kws := keywordsForSearch("Go go a 并发 并发")
+	want := []string{"go", "并发"}
+	if len(kws) != len(want) {
+		t.Fatalf("kws = %v, want %v", kws, want)
+	}
+}
+
+func TestCheckDimensions(t *testing.T) {
+	embedder := embedding.NewMock(4)
+	s := &Service{
+		embedder: embedder,
+		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := s.checkDimensions([][]float32{make([]float32, 4)}); err != nil {
+		t.Errorf("matching dimensions should pass: %v", err)
+	}
+	if err := s.checkDimensions([][]float32{make([]float32, 8)}); err == nil {
+		t.Error("mismatched dimensions should fail")
 	}
 }

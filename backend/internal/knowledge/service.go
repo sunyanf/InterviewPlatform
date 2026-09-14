@@ -78,6 +78,9 @@ func (s *Service) CreateDocument(ctx context.Context, req CreateDocumentRequest)
 		s.log.Error("embed chunks failed", "title", req.Title, "error", err)
 		return nil, apperrors.Wrap("EMBEDDING_FAILED", "生成分块向量失败", 500, err)
 	}
+	if err := s.checkDimensions(vectors); err != nil {
+		return nil, err
+	}
 
 	// 构造文档与分块（分块 metadata 冗余文档来源信息，保证召回结果可追踪）
 	doc := &Document{
@@ -183,6 +186,9 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (*SearchResult,
 		s.log.Error("embed query failed", "error", err)
 		return nil, apperrors.Wrap("EMBEDDING_FAILED", "生成查询向量失败", 500, err)
 	}
+	if err := s.checkDimensions(vec); err != nil {
+		return nil, err
+	}
 	vectorHits, err := s.repo.SearchVector(ctx, vec[0], req.Domain, recallK)
 	if err != nil {
 		s.log.Error("vector search failed", "error", err)
@@ -197,7 +203,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (*SearchResult,
 	}
 
 	// 关键词通道（中文兜底）
-	kwHits, err := s.repo.SearchKeyword(ctx, splitQueryTokens(query), req.Domain, recallK)
+	kwHits, err := s.repo.SearchKeyword(ctx, keywordsForSearch(query), req.Domain, recallK)
 	if err != nil {
 		s.log.Error("keyword search failed", "error", err)
 		return nil, apperrors.Wrap("INTERNAL_ERROR", "关键词检索失败", 500, err)
@@ -269,6 +275,60 @@ func splitQueryTokens(query string) []string {
 		return false
 	}
 	return strings.FieldsFunc(query, splitFn)
+}
+
+// keywordsForSearch 将查询拆分为检索关键词：
+// CJK token 追加相邻二元组改善部分匹配，过滤过短关键词并去重
+func keywordsForSearch(query string) []string {
+	var kws []string
+	seen := map[string]bool{}
+	add := func(kw string) {
+		kw = strings.ToLower(kw)
+		if len(kw) >= 2 && !seen[kw] {
+			seen[kw] = true
+			kws = append(kws, kw)
+		}
+	}
+	for _, tok := range splitQueryTokens(query) {
+		add(tok)
+		for _, bg := range cjkBigrams(tok) {
+			add(bg)
+		}
+	}
+	return kws
+}
+
+// cjkBigrams 提取 token 中相邻 CJK 字符二元组
+// 例："调度模型" → ["调度", "度模", "模型"]，使部分短语也能命中
+func cjkBigrams(token string) []string {
+	runes := []rune(token)
+	var out []string
+	for i := 0; i+1 < len(runes); i++ {
+		if isCJK(runes[i]) && isCJK(runes[i+1]) {
+			out = append(out, string(runes[i:i+2]))
+		}
+	}
+	return out
+}
+
+// isCJK 判断是否为常用 CJK 统一表意文字
+func isCJK(r rune) bool {
+	return (r >= 0x4E00 && r <= 0x9FFF) || (r >= 0x3400 && r <= 0x4DBF)
+}
+
+// checkDimensions 校验向量维度与 Embedder 声明一致
+// （外部 Provider 输出属于系统边界，必须验证，见 AGENTS.md #11）
+func (s *Service) checkDimensions(vectors [][]float32) error {
+	for _, v := range vectors {
+		if len(v) != s.embedder.Dimensions() {
+			s.log.Error("embedding dimension mismatch", "provider", s.embedder.Name(),
+				"got", len(v), "want", s.embedder.Dimensions())
+			return apperrors.New("EMBEDDING_DIMENSION_MISMATCH",
+				fmt.Sprintf("Embedding 维度不一致：provider=%s 返回 %d 维，期望 %d 维",
+					s.embedder.Name(), len(v), s.embedder.Dimensions()), 500)
+		}
+	}
+	return nil
 }
 
 // parseOptionalTime 解析可选的 RFC3339 时间字符串

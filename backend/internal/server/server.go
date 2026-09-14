@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ai-interview-platform/internal/config"
+	"ai-interview-platform/internal/interview"
 	"ai-interview-platform/internal/job"
 	appmiddleware "ai-interview-platform/internal/middleware"
 	"ai-interview-platform/internal/resume"
@@ -22,13 +23,14 @@ import (
 
 // Server HTTP 服务器
 type Server struct {
-	cfg     *config.Config
-	db      *pgxpool.Pool
-	log     *slog.Logger
-	jwtMgr  *jwt.Manager
-	storage storage.Storage
-	llm     llm.Provider
-	http    *http.Server
+	cfg       *config.Config
+	db        *pgxpool.Pool
+	log       *slog.Logger
+	jwtMgr    *jwt.Manager
+	storage   storage.Storage
+	llm       llm.Provider
+	resumeSvc *resume.Service
+	http      *http.Server
 }
 
 // New 创建 Server
@@ -41,6 +43,11 @@ func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Man
 		storage: st,
 		llm:     llmProv,
 	}
+
+	// 共享的简历 Service（面试模块依赖）
+	resumeRepo := resume.NewRepository(db)
+	jobRepo := job.NewRepository(db)
+	s.resumeSvc = resume.NewService(resumeRepo, st, llmProv, jobRepo, log)
 
 	r := s.routes()
 
@@ -91,6 +98,14 @@ func (s *Server) routes() http.Handler {
 			r.Get("/resumes/{id}", s.resumeHandler().Get)
 			r.Post("/resumes/{id}/parse", s.resumeHandler().Parse)
 			r.Post("/resumes/{id}/match", s.resumeHandler().Match)
+
+			// 面试
+			r.Post("/interviews", s.interviewHandler().Create)
+			r.Get("/interviews", s.interviewHandler().List)
+			r.Get("/interviews/{id}", s.interviewHandler().Get)
+			r.Post("/interviews/{id}/start", s.interviewHandler().Start)
+			r.Post("/interviews/{id}/answer", s.interviewHandler().SubmitAnswer)
+			r.Post("/interviews/{id}/finish", s.interviewHandler().Finish)
 		})
 	})
 
@@ -113,10 +128,15 @@ func (s *Server) jobHandler() *job.Handler {
 
 // resumeHandler 初始化简历 Handler
 func (s *Server) resumeHandler() *resume.Handler {
-	repo := resume.NewRepository(s.db)
+	return resume.NewHandler(s.resumeSvc)
+}
+
+// interviewHandler 初始化面试 Handler
+func (s *Server) interviewHandler() *interview.Handler {
+	repo := interview.NewRepository(s.db)
 	jobRepo := job.NewRepository(s.db)
-	svc := resume.NewService(repo, s.storage, s.llm, jobRepo, s.log)
-	return resume.NewHandler(svc)
+	svc := interview.NewService(repo, jobRepo, s.resumeSvc, s.llm, s.log)
+	return interview.NewHandler(svc)
 }
 
 // Start 启动服务器

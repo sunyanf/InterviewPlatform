@@ -51,6 +51,51 @@ func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse
 		}, nil
 	}
 
+	// 面试出题 mock 输出
+	if contains(lastMsg, "面试题") || contains(lastMsg, "面试官") {
+		mockQuestions := map[string]interface{}{
+			"questions": []map[string]interface{}{
+				{
+					"question":   "请介绍一下 Go 语言中 goroutine 和线程的区别，以及 channel 的使用场景。",
+					"type":       "technical",
+					"difficulty": "medium",
+					"expected_points": []string{
+						"goroutine 是用户态轻量级协程，线程是内核态",
+						"goroutine 初始栈小，可动态增长",
+						"channel 用于 goroutine 间通信",
+					},
+				},
+				{
+					"question":   "请描述一次你参与高并发系统设计的经历，你是如何保证系统稳定性的？",
+					"type":       "project",
+					"difficulty": "medium",
+					"expected_points": []string{
+						"有具体场景和量化指标",
+						"提到限流、熔断、降级等手段",
+						"有复盘和改进",
+					},
+				},
+				{
+					"question":   "你如何理解微服务架构的优缺点？在什么场景下会选择微服务？",
+					"type":       "technical",
+					"difficulty": "easy",
+					"expected_points": []string{
+						"优点：独立部署、团队自治",
+						"缺点：分布式复杂性、运维成本",
+						"小团队小业务不需要微服务",
+					},
+				},
+			},
+		}
+		data, _ := json.Marshal(mockQuestions)
+		return &ChatResponse{
+			Content:      string(data),
+			Model:        "mock",
+			InputTokens:  50,
+			OutputTokens: 200,
+		}, nil
+	}
+
 	// 默认返回简单响应
 	return &ChatResponse{
 		Content:      fmt.Sprintf(`{"response": "mock response for: %s"}`, truncate(lastMsg, 50)),

@@ -19,6 +19,7 @@ interview.question_planner.v1 → v2（Week5：出题增加 RAG 知识库参考�
 interview.interviewer.v1
 interview.follow_up.v1
 interview.answer_analyzer.v1
+interview.evaluator.v1（Week6：整场维度评估，只产维度分/证据/建议，总分由业务代码计算）
 evaluation.evaluator.v1
 learning.coach.v1
 ```

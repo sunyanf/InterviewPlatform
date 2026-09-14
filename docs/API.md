@@ -132,6 +132,39 @@ POST   /api/v1/knowledge/search      混合检索（向量 + FTS + 关键词，R
 
 ---
 
+# 5.6 评估（Evaluation）
+
+需要鉴权。仅对 `COMPLETED` 状态的面试可评估；同一会话重跑覆盖。
+
+```text
+POST /api/v1/evaluations/sessions/:sessionID   触发评估（LLM 维度评分 → 确定性总分）
+GET  /api/v1/evaluations/sessions/:sessionID   查询会话评估（未评估 404）
+GET  /api/v1/evaluations                       当前用户评估列表
+```
+
+评估基于证据（AGENTS.md #15）：LLM 只输出维度分（0-100）+ 证据（引用回答原文）+ 改进建议；
+**总分由业务代码按 Rubric 权重确定性计算**：`correctness 0.30 + depth 0.25 + logic 0.25 + communication 0.20`。
+
+评估失败可重新触发（Upsert 覆盖）；无回答的面试返回 409；跨用户访问返回 403。
+
+响应示例：
+
+```json
+{
+  "id": "...",
+  "session_id": "...",
+  "dimensions": {"correctness": 70, "depth": 60, "logic": 75, "communication": 80},
+  "evidence": [{"question_seq": 1, "issue": "…", "evidence": "…回答原文…", "reference": "go-official-docs"}],
+  "recommendations": ["…", "…"],
+  "rubric": {"dimensions": [{"name": "correctness", "label": "技术正确性", "weight": 0.30}]},
+  "total_score": 70.75,
+  "prompt_version": "interview.evaluator.v1",
+  "model": "mock"
+}
+```
+
+---
+
 # 6. WebSocket
 
 ```text

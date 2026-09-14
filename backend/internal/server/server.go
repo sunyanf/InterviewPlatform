@@ -12,6 +12,7 @@ import (
 
 	"ai-interview-platform/internal/agent"
 	"ai-interview-platform/internal/config"
+	"ai-interview-platform/internal/evaluation"
 	"ai-interview-platform/internal/interview"
 	"ai-interview-platform/internal/job"
 	"ai-interview-platform/internal/knowledge"
@@ -130,6 +131,11 @@ func (s *Server) routes() http.Handler {
 			r.Get("/knowledge/documents/{id}", s.knowledgeHandler().Get)
 			r.Delete("/knowledge/documents/{id}", s.knowledgeHandler().Delete)
 			r.Post("/knowledge/search", s.knowledgeHandler().Search)
+
+			// 评估
+			r.Post("/evaluations/sessions/{sessionID}", s.evaluationHandler().Evaluate)
+			r.Get("/evaluations/sessions/{sessionID}", s.evaluationHandler().Get)
+			r.Get("/evaluations", s.evaluationHandler().List)
 		})
 	})
 
@@ -170,6 +176,14 @@ func (s *Server) knowledgeHandler() *knowledge.Handler {
 	repo := knowledge.NewRepository(s.db)
 	svc := knowledge.NewService(repo, s.embedder, s.log)
 	return knowledge.NewHandler(svc)
+}
+
+// evaluationHandler 初始化评估 Handler
+func (s *Server) evaluationHandler() *evaluation.Handler {
+	evalRepo := evaluation.NewRepository(s.db)
+	interviewRepo := interview.NewRepository(s.db)
+	svc := evaluation.NewService(evalRepo, interviewRepo, s.agent, s.log)
+	return evaluation.NewHandler(svc)
 }
 
 // knowledgeRetriever 将 knowledge.Service 适配为 interview.KnowledgeRetriever

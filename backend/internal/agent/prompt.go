@@ -34,6 +34,13 @@ const (
 	// 输出 Schema：{"claims","correct_points","wrong_points","missing_points","knowledge_gaps"}
 	// 系统约束：分析必须基于回答原文与参考要点（Evidence 原则），不做最终评分
 	PromptAnswerAnalyzer = "interview.answer_analyzer.v1"
+
+	// PromptEvaluator 整场评估
+	// 用途：基于整场问答与回答分析，给出维度评分、证据与改进建议
+	// 输入：岗位标题、面试类型、逐题问答（问题/参考要点/回答/分析）、知识库参考资料（可选）
+	// 输出 Schema：{"dimensions":{"correctness","depth","logic","communication"},"evidence":[{"question_seq","issue","evidence","reference"}],"recommendations":[]}
+	// 系统约束：只输出维度分（0-100 整数）与证据；总分由业务代码按 Rubric 权重确定性计算（AGENTS.md #15）
+	PromptEvaluator = "interview.evaluator.v1"
 )
 
 // buildSystemPrompt 构造带版本号的 system prompt

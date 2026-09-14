@@ -69,6 +69,38 @@ func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse
 		}, nil
 	}
 
+	// 整场评估 mock 输出（注意：在出题检测之前，prompt 含"评估官"不含"面试官"）
+	if contains(lastMsg, "整场问答记录进行评估") {
+		mockEvaluation := map[string]interface{}{
+			"dimensions": map[string]interface{}{
+				"correctness":   70,
+				"depth":         60,
+				"logic":         75,
+				"communication": 80,
+			},
+			"evidence": []map[string]interface{}{
+				{
+					"question_seq": 1,
+					"issue":        "未提到 channel 的关闭和 select 机制",
+					"evidence":     "候选人只说明了 channel 用于通信，未涉及关闭语义",
+					"reference":    "go-official-docs",
+				},
+			},
+			"recommendations": []string{
+				"深入学习 channel 的底层实现与关闭语义",
+				"回答时先给结论再展开论据",
+				"结合项目经验说明高并发手段",
+			},
+		}
+		data, _ := json.Marshal(mockEvaluation)
+		return &ChatResponse{
+			Content:      string(data),
+			Model:        "mock",
+			InputTokens:  200,
+			OutputTokens: 180,
+		}, nil
+	}
+
 	// 追问决策 mock 输出
 	if contains(lastMsg, "判断是否需要追问") {
 		mockFollowUp := map[string]interface{}{

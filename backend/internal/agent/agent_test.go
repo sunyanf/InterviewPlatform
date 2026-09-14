@@ -13,9 +13,12 @@ import (
 type stubProvider struct {
 	content string
 	err     error
+	// lastCtx 记录最近一次调用的 ctx（用于超时断言）
+	lastCtx context.Context
 }
 
 func (s *stubProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	s.lastCtx = ctx
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -189,5 +192,36 @@ func TestLLMError_Propagates(t *testing.T) {
 	agent := New(&stubProvider{err: errors.New("timeout")}, slog.Default())
 	if _, err := agent.PlanQuestions(context.Background(), PlanQuestionsInput{Count: 1}); err == nil {
 		t.Error("llm error should propagate")
+	}
+}
+
+func TestChat_DefaultTimeoutApplied(t *testing.T) {
+	// 上游 ctx 无 deadline 时，agent.chat 应施加默认超时（保护同步链路）
+	stub := &stubProvider{content: `{"questions":[]}`}
+	agent := New(stub, slog.Default())
+	_, _ = agent.PlanQuestions(context.Background(), PlanQuestionsInput{Count: 1})
+
+	if stub.lastCtx == nil {
+		t.Fatal("stub should capture ctx")
+	}
+	_, ok := stub.lastCtx.Deadline()
+	if !ok {
+		t.Error("chat should apply default timeout when caller has no deadline")
+	}
+}
+
+func TestPlanQuestions_EmptyOutput(t *testing.T) {
+	// 模型输出为空 → Schema 校验必须拦截，不得静默降级
+	agent := newTestAgent("")
+	if _, err := agent.PlanQuestions(context.Background(), PlanQuestionsInput{Count: 1}); err == nil {
+		t.Error("empty output should fail schema validation")
+	}
+}
+
+func TestPlanQuestions_WrongFieldType(t *testing.T) {
+	// expected_points 为字符串而非数组 → 整体校验失败（不落库、不静默）
+	agent := newTestAgent(`{"questions":[{"question":"Q1","type":"technical","difficulty":"easy","expected_points":"not-an-array"}]}`)
+	if _, err := agent.PlanQuestions(context.Background(), PlanQuestionsInput{Count: 1}); err == nil {
+		t.Error("wrong field type should fail schema validation")
 	}
 }

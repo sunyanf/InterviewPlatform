@@ -6,9 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"ai-interview-platform/pkg/llm"
 )
+
+// chatTimeout 单次 LLM 调用默认超时（保护同步请求链路不被慢 LLM 无限阻塞）
+const chatTimeout = 30 * time.Second
 
 // Agent AI 编排器：负责 Prompt 管理、LLM 调用、结构化输出校验。
 // Agent 只产出内容（问题、分析、建议），不决定任何业务状态（见 ADR-0004）。
@@ -24,6 +28,13 @@ func New(llmProv llm.Provider, log *slog.Logger) *Agent {
 
 // chat 调用 LLM 并清理输出
 func (a *Agent) chat(ctx context.Context, system, user string, temperature float64) (string, error) {
+	// 上游无 deadline 时施加默认超时（已有时尊重上游设置）
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, chatTimeout)
+		defer cancel()
+	}
+
 	resp, err := a.llm.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{
 			{Role: "system", Content: system},

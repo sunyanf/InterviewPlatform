@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -22,7 +20,7 @@ services:
     image: redis:7-alpine
     container_name: ai-interview-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -32,7 +30,7 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     container_name: ai-interview-minio
     environment:
       MINIO_ROOT_USER: minioadmin

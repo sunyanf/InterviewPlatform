@@ -2,35 +2,43 @@ package interview
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"ai-interview-platform/internal/agent"
 	"ai-interview-platform/internal/job"
 	"ai-interview-platform/internal/resume"
 	apperrors "ai-interview-platform/pkg/errors"
-	"ai-interview-platform/pkg/llm"
 )
+
+// AgentService Agent 模块对 Interview 模块暴露的能力接口
+// （模块间通过 Service 接口交互，见 docs/architecture/MODULE_BOUNDARIES.md）
+type AgentService interface {
+	PlanQuestions(ctx context.Context, in agent.PlanQuestionsInput) ([]agent.PlannedQuestion, error)
+	AnalyzeAnswer(ctx context.Context, in agent.AnalyzeAnswerInput) (*agent.AnswerAnalysis, error)
+	DecideFollowUp(ctx context.Context, in agent.FollowUpInput) (*agent.FollowUpDecision, error)
+	OpeningMessage(ctx context.Context, in agent.OpeningInput) (string, error)
+}
 
 // Service 面试业务逻辑层
 type Service struct {
 	repo      *Repository
 	jobRepo   *job.Repository
 	resumeSvc *resume.Service
-	llm       llm.Provider
+	agent     AgentService
 	log       *slog.Logger
 }
 
 // NewService 创建面试 Service
-func NewService(repo *Repository, jobRepo *job.Repository, resumeSvc *resume.Service, llmProv llm.Provider, log *slog.Logger) *Service {
+func NewService(repo *Repository, jobRepo *job.Repository, resumeSvc *resume.Service, agentSvc AgentService, log *slog.Logger) *Service {
 	return &Service{
 		repo:      repo,
 		jobRepo:   jobRepo,
 		resumeSvc: resumeSvc,
-		llm:       llmProv,
+		agent:     agentSvc,
 		log:       log,
 	}
 }
@@ -125,7 +133,7 @@ func (s *Service) Create(ctx context.Context, userID string, req CreateSessionRe
 	return sess, nil
 }
 
-// Start 开始面试：状态机 INIT/READY → RUNNING，并生成问题
+// Start 开始面试：状态机 INIT/READY → RUNNING，Agent 出题 + 面试官开场白
 func (s *Service) Start(ctx context.Context, userID, sessionID string) (*Session, error) {
 	sess, err := s.getOwnedSession(ctx, userID, sessionID)
 	if err != nil {
@@ -138,18 +146,71 @@ func (s *Service) Start(ctx context.Context, userID, sessionID string) (*Session
 			fmt.Sprintf("当前状态 %s 不允许开始面试", sess.Status), 400)
 	}
 
-	// 基础 AI 出题（LLM 只生成内容，不决定状态）
-	questions, err := s.generateQuestions(ctx, sess)
+	// 收集岗位信息
+	j, err := s.jobRepo.GetJobByID(ctx, sess.JobID)
 	if err != nil {
-		s.log.Error("generate questions failed", "session_id", sessionID, "error", err)
+		return nil, apperrors.Wrap("INTERNAL_ERROR", "查询岗位失败", 500, err)
+	}
+	if j == nil {
+		return nil, apperrors.New("JOB_NOT_FOUND", "岗位不存在", 404)
+	}
+
+	// 收集简历技能（可选）
+	resumeSkills := []string{}
+	if sess.ResumeID != "" {
+		rs, err := s.resumeSvc.Get(ctx, sess.ResumeID)
+		if err == nil && rs != nil && len(rs.Skills) > 0 {
+			resumeSkills = rs.Skills
+		}
+	}
+
+	// Agent 出题规划（LLM 只生成内容，不决定状态）
+	planned, err := s.agent.PlanQuestions(ctx, agent.PlanQuestionsInput{
+		JobTitle:        j.Title,
+		JobSkills:       j.Skills,
+		JobRequirements: j.Requirements,
+		ResumeSkills:    resumeSkills,
+		InterviewType:   sess.InterviewType,
+		Count:           sess.Config.QuestionCount,
+	})
+	if err != nil {
+		s.log.Error("plan questions failed", "session_id", sessionID, "error", err)
 		return nil, apperrors.Wrap("QUESTION_GENERATION_FAILED", "生成面试问题失败", 500, err)
 	}
-	if len(questions) == 0 {
+	if len(planned) == 0 {
 		return nil, apperrors.New("NO_QUESTIONS_GENERATED", "未能生成面试问题", 500)
+	}
+
+	questions := make([]Question, len(planned))
+	for i, p := range planned {
+		questions[i] = Question{
+			Seq:            i + 1,
+			QuestionType:   p.Type,
+			Question:       p.Question,
+			Difficulty:     p.Difficulty,
+			Source:         "llm",
+			ExpectedPoints: p.ExpectedPoints,
+		}
 	}
 
 	if err := s.repo.CreateQuestions(ctx, sess.ID, questions); err != nil {
 		return nil, apperrors.Wrap("INTERNAL_ERROR", "保存面试问题失败", 500, err)
+	}
+
+	// Agent 面试官开场白（尽力而为，失败不阻塞开考）
+	opening, err := s.agent.OpeningMessage(ctx, agent.OpeningInput{
+		JobTitle:      j.Title,
+		InterviewType: sess.InterviewType,
+		FirstQuestion: planned[0].Question,
+	})
+	if err != nil {
+		s.log.Warn("opening message failed", "session_id", sessionID, "error", err)
+	} else if err := s.repo.UpdateSessionMetadata(ctx, sess.ID, map[string]interface{}{
+		"opening_message": opening,
+	}); err != nil {
+		s.log.Warn("save opening message failed", "session_id", sessionID, "error", err)
+	} else {
+		sess.Metadata = map[string]interface{}{"opening_message": opening}
 	}
 
 	now := time.Now()
@@ -163,7 +224,7 @@ func (s *Service) Start(ctx context.Context, userID, sessionID string) (*Session
 	return sess, nil
 }
 
-// Get 查询面试详情（含问题和回答状态）
+// Get 查询面试详情（含问题、回答与分析）
 func (s *Service) Get(ctx context.Context, userID, sessionID string) (*Session, error) {
 	sess, err := s.getOwnedSession(ctx, userID, sessionID)
 	if err != nil {
@@ -178,6 +239,7 @@ func (s *Service) Get(ctx context.Context, userID, sessionID string) (*Session, 
 
 	questions, err := s.repo.ListQuestionsBySession(ctx, sess.ID)
 	if err != nil {
+		s.log.Error("list questions failed", "session_id", sess.ID, "error", err)
 		return nil, apperrors.Wrap("INTERNAL_ERROR", "查询面试问题失败", 500, err)
 	}
 	if questions == nil {
@@ -206,8 +268,9 @@ func (s *Service) List(ctx context.Context, userID string) ([]Session, error) {
 	return list, nil
 }
 
-// SubmitAnswer 提交回答
-func (s *Service) SubmitAnswer(ctx context.Context, userID, sessionID string, req SubmitAnswerRequest) (*Answer, error) {
+// SubmitAnswer 提交回答：保存回答 → Agent 分析 → Agent 追问决策
+// Agent 只产出内容，是否保存分析/创建追问由业务代码决定
+func (s *Service) SubmitAnswer(ctx context.Context, userID, sessionID string, req SubmitAnswerRequest) (*SubmitAnswerResult, error) {
 	sess, err := s.getOwnedSession(ctx, userID, sessionID)
 	if err != nil {
 		return nil, err
@@ -235,7 +298,6 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID, sessionID string, re
 		return nil, apperrors.New("QUESTION_NOT_IN_SESSION", "问题不属于当前面试", 400)
 	}
 
-	// 每个问题只能回答一次（数据库 UNIQUE 约束兜底）
 	answer := &Answer{
 		SessionID:   sess.ID,
 		QuestionID:  q.ID,
@@ -250,7 +312,64 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID, sessionID string, re
 		return nil, apperrors.Wrap("INTERNAL_ERROR", "保存回答失败", 500, err)
 	}
 
-	return answer, nil
+	// Agent 回答分析（尽力而为：回答已保存，分析失败不阻塞提交）
+	var analysis *agent.AnswerAnalysis
+	analysis, err = s.agent.AnalyzeAnswer(ctx, agent.AnalyzeAnswerInput{
+		Question:       q.Question,
+		ExpectedPoints: q.ExpectedPoints,
+		AnswerText:     req.TextContent,
+		Difficulty:     q.Difficulty,
+	})
+	if err != nil {
+		s.log.Warn("analyze answer failed", "session_id", sess.ID, "question_id", q.ID, "error", err)
+	} else if err := s.repo.UpdateAnswerAnalysis(ctx, answer.ID, analysis); err != nil {
+		s.log.Warn("update answer analysis failed", "answer_id", answer.ID, "error", err)
+	}
+	answer.Analysis = analysis
+
+	// Agent 追问决策（仅普通问题可追问，避免追问链无限延伸）
+	var followUp *Question
+	if analysis != nil && q.QuestionType != QTypeFollowUp {
+		decision, err := s.agent.DecideFollowUp(ctx, agent.FollowUpInput{
+			Question:       q.Question,
+			ExpectedPoints: q.ExpectedPoints,
+			AnswerText:     req.TextContent,
+			Analysis:       analysis,
+		})
+		if err != nil {
+			s.log.Warn("decide follow-up failed", "session_id", sess.ID, "error", err)
+		} else if decision.ShouldFollowUp {
+			// 业务代码决定创建追问问题
+			maxSeq, err := s.repo.GetMaxSeq(ctx, sess.ID)
+			if err != nil {
+				s.log.Warn("get max seq failed", "session_id", sess.ID, "error", err)
+			} else {
+				fuQuestions := []Question{{
+					Seq:            maxSeq + 1,
+					QuestionType:   QTypeFollowUp,
+					Question:       decision.Question,
+					Difficulty:     q.Difficulty,
+					Source:         "llm",
+					ExpectedPoints: []string{},
+					Metadata: map[string]interface{}{
+						"parent_question_id": q.ID,
+						"target_gap":         decision.TargetGap,
+					},
+				}}
+				if err := s.repo.CreateQuestions(ctx, sess.ID, fuQuestions); err != nil {
+					s.log.Warn("create follow-up question failed", "session_id", sess.ID, "error", err)
+				} else {
+					followUp = &fuQuestions[0]
+				}
+			}
+		}
+	}
+
+	return &SubmitAnswerResult{
+		Answer:   answer,
+		Analysis: analysis,
+		FollowUp: followUp,
+	}, nil
 }
 
 // Finish 结束面试：状态机 RUNNING → COMPLETED
@@ -292,114 +411,4 @@ func (s *Service) getOwnedSession(ctx context.Context, userID, sessionID string)
 		return nil, apperrors.ErrForbidden
 	}
 	return sess, nil
-}
-
-// generatedQuestion LLM 生成的临时问题结构（AI 数据 Contract，见 docs/AI_DATA_CONTRACTS.md）
-type generatedQuestion struct {
-	Question       string   `json:"question"`
-	Type           string   `json:"type"`
-	Difficulty     string   `json:"difficulty"`
-	ExpectedPoints []string `json:"expected_points"`
-}
-
-type generatedQuestionList struct {
-	Questions []generatedQuestion `json:"questions"`
-}
-
-// generateQuestions 基础 AI 出题：根据岗位和简历生成问题
-// LLM 输出必须经过 Schema 校验 + 业务校验，且不决定任何业务状态
-func (s *Service) generateQuestions(ctx context.Context, sess *Session) ([]Question, error) {
-	// 收集岗位信息
-	j, err := s.jobRepo.GetJobByID(ctx, sess.JobID)
-	if err != nil {
-		return nil, fmt.Errorf("get job: %w", err)
-	}
-	if j == nil {
-		return nil, fmt.Errorf("job not found: %s", sess.JobID)
-	}
-
-	// 收集简历技能（可选）
-	resumeSkills := ""
-	if sess.ResumeID != "" {
-		rs, err := s.resumeSvc.Get(ctx, sess.ResumeID)
-		if err == nil && rs != nil && len(rs.Skills) > 0 {
-			resumeSkills = strings.Join(rs.Skills, "、")
-		}
-	}
-
-	prompt := fmt.Sprintf(`你是一个技术面试官。请根据以下信息生成 %d 道面试题。
-
-岗位：%s
-岗位技能要求：%s
-岗位任职要求：%s
-候选人技能：%s
-面试类型：%s
-
-要求：
-1. 只返回 JSON，不要包含任何解释文字
-2. JSON 结构：{"questions":[{"question":"","type":"","difficulty":"","expected_points":[""]}]}
-3. type 只能是 technical、behavioral、project 之一
-4. difficulty 只能是 easy、medium、hard 之一
-5. expected_points 是该题的参考答案要点，2-5 条
-6. 问题应循序渐进，覆盖岗位核心技能`,
-		sess.Config.QuestionCount, j.Title, strings.Join(j.Skills, "、"),
-		strings.Join(j.Requirements, "；"), resumeSkills, sess.InterviewType)
-
-	resp, err := s.llm.Chat(ctx, llm.ChatRequest{
-		Messages: []llm.Message{
-			{Role: "system", Content: "你是一个专业的技术面试官，只输出 JSON。"},
-			{Role: "user", Content: prompt},
-		},
-		Temperature: 0.7,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("llm chat: %w", err)
-	}
-
-	// Schema 校验
-	content := cleanJSON(resp.Content)
-	var parsed generatedQuestionList
-	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		return nil, fmt.Errorf("invalid llm json output: %w", err)
-	}
-
-	// 业务校验 + 归一化
-	validTypes := map[string]bool{QTypeTechnical: true, QTypeBehavioral: true, QTypeProject: true}
-	validDifficulty := map[string]bool{"easy": true, "medium": true, "hard": true}
-
-	var questions []Question
-	for i, gq := range parsed.Questions {
-		if strings.TrimSpace(gq.Question) == "" {
-			continue
-		}
-		if !validTypes[gq.Type] {
-			gq.Type = QTypeTechnical
-		}
-		if !validDifficulty[gq.Difficulty] {
-			gq.Difficulty = "medium"
-		}
-		if gq.ExpectedPoints == nil {
-			gq.ExpectedPoints = []string{}
-		}
-
-		questions = append(questions, Question{
-			Seq:            i + 1,
-			QuestionType:   gq.Type,
-			Question:       strings.TrimSpace(gq.Question),
-			Difficulty:     gq.Difficulty,
-			Source:         "llm",
-			ExpectedPoints: gq.ExpectedPoints,
-		})
-	}
-
-	return questions, nil
-}
-
-// cleanJSON 清理 LLM 输出中的 markdown 标记
-func cleanJSON(s string) string {
-	s = strings.TrimSpace(s)
-	s = strings.TrimPrefix(s, "```json")
-	s = strings.TrimPrefix(s, "```")
-	s = strings.TrimSuffix(s, "```")
-	return strings.TrimSpace(s)
 }

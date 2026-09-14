@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"ai-interview-platform/internal/agent"
 	"ai-interview-platform/internal/config"
 	"ai-interview-platform/internal/interview"
 	"ai-interview-platform/internal/job"
@@ -30,6 +31,7 @@ type Server struct {
 	storage   storage.Storage
 	llm       llm.Provider
 	resumeSvc *resume.Service
+	agent     *agent.Agent
 	http      *http.Server
 }
 
@@ -48,6 +50,9 @@ func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Man
 	resumeRepo := resume.NewRepository(db)
 	jobRepo := job.NewRepository(db)
 	s.resumeSvc = resume.NewService(resumeRepo, st, llmProv, jobRepo, log)
+
+	// 共享的 Agent（AI 编排）
+	s.agent = agent.New(llmProv, log)
 
 	r := s.routes()
 
@@ -135,7 +140,7 @@ func (s *Server) resumeHandler() *resume.Handler {
 func (s *Server) interviewHandler() *interview.Handler {
 	repo := interview.NewRepository(s.db)
 	jobRepo := job.NewRepository(s.db)
-	svc := interview.NewService(repo, jobRepo, s.resumeSvc, s.llm, s.log)
+	svc := interview.NewService(repo, jobRepo, s.resumeSvc, s.agent, s.log)
 	return interview.NewHandler(svc)
 }
 

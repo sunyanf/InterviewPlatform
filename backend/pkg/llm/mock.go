@@ -51,6 +51,51 @@ func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse
 		}, nil
 	}
 
+	// 回答分析 mock 输出
+	if contains(lastMsg, "请分析候选人对下面问题的回答") {
+		mockAnalysis := map[string]interface{}{
+			"claims":         []string{"goroutine 是用户态轻量级协程", "channel 遵循 CSP 模型"},
+			"correct_points": []string{"说出了 goroutine 轻量级和用户态调度的特点"},
+			"wrong_points":   []string{"channel 一定是线程安全的说法不准确"},
+			"missing_points": []string{"未提到 channel 的关闭和 select 机制"},
+			"knowledge_gaps": []string{"channel 底层实现"},
+		}
+		data, _ := json.Marshal(mockAnalysis)
+		return &ChatResponse{
+			Content:      string(data),
+			Model:        "mock",
+			InputTokens:  80,
+			OutputTokens: 150,
+		}, nil
+	}
+
+	// 追问决策 mock 输出
+	if contains(lastMsg, "判断是否需要追问") {
+		mockFollowUp := map[string]interface{}{
+			"should_follow_up": true,
+			"reason":           "候选人对 channel 的回答不够深入，存在明显知识缺口",
+			"question":         "你刚才提到 channel，能具体说说带缓冲和不带缓冲 channel 的区别吗？",
+			"target_gap":       "channel 底层机制",
+		}
+		data, _ := json.Marshal(mockFollowUp)
+		return &ChatResponse{
+			Content:      string(data),
+			Model:        "mock",
+			InputTokens:  80,
+			OutputTokens: 80,
+		}, nil
+	}
+
+	// 面试开场白 mock 输出（注意：必须在面试官/面试题检测之前）
+	if contains(lastMsg, "面试开场白") {
+		return &ChatResponse{
+			Content:      "你好，欢迎参加本次岗位面试。我是今天的面试官，我们会围绕岗位相关技能进行交流。让我们先从第一道题开始：",
+			Model:        "mock",
+			InputTokens:  40,
+			OutputTokens: 60,
+		}, nil
+	}
+
 	// 面试出题 mock 输出
 	if contains(lastMsg, "面试题") || contains(lastMsg, "面试官") {
 		mockQuestions := map[string]interface{}{

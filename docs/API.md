@@ -48,8 +48,29 @@ POST /api/v1/interviews/:id/start
 GET  /api/v1/interviews/:id
 POST /api/v1/interviews/:id/answer
 POST /api/v1/interviews/:id/finish
-GET  /api/v1/interviews/:id/report
 ```
+
+`POST /interviews/:id/answer` 响应包含 Agent 分析与追问建议：
+
+```json
+{
+  "data": {
+    "answer": { "id": "...", "text_content": "..." },
+    "analysis": {
+      "claims": ["..."],
+      "correct_points": ["..."],
+      "wrong_points": ["..."],
+      "missing_points": ["..."],
+      "knowledge_gaps": ["..."],
+      "prompt_version": "interview.answer_analyzer.v1",
+      "model": "..."
+    },
+    "follow_up": { "id": "...", "question_type": "follow_up", "question": "..." }
+  }
+}
+```
+
+`analysis` / `follow_up` 为 Agent 建议，均由业务代码决定是否落库；LLM 不拥有会话状态（ADR-0004）。
 
 ---
 

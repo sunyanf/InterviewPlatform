@@ -1,6 +1,10 @@
 package interview
 
-import "time"
+import (
+	"time"
+
+	"ai-interview-platform/internal/agent"
+)
 
 // 会话状态常量（状态只能由业务代码控制，见 ADR-0004）
 const (
@@ -44,22 +48,24 @@ type Session struct {
 	UpdatedAt     time.Time     `json:"updated_at"`
 
 	// 关联数据（查询详情时填充）
-	JobTitle      string     `json:"job_title,omitempty"`
-	Questions     []Question `json:"questions,omitempty"`
-	AnsweredCount int        `json:"answered_count"`
+	JobTitle      string                 `json:"job_title,omitempty"`
+	Questions     []Question             `json:"questions,omitempty"`
+	AnsweredCount int                    `json:"answered_count"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // Question 面试问题
 type Question struct {
-	ID             string    `json:"id"`
-	SessionID      string    `json:"session_id"`
-	Seq            int       `json:"seq"`
-	QuestionType   string    `json:"question_type"`
-	Question       string    `json:"question"`
-	Difficulty     string    `json:"difficulty"`
-	Source         string    `json:"source"`
-	ExpectedPoints []string  `json:"expected_points"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             string                 `json:"id"`
+	SessionID      string                 `json:"session_id"`
+	Seq            int                    `json:"seq"`
+	QuestionType   string                 `json:"question_type"`
+	Question       string                 `json:"question"`
+	Difficulty     string                 `json:"difficulty"`
+	Source         string                 `json:"source"`
+	ExpectedPoints []string               `json:"expected_points"`
+	Metadata       map[string]interface{} `json:"metadata,omitempty"`
+	CreatedAt      time.Time              `json:"created_at"`
 
 	// 回答状态（查询详情时填充）
 	Answered bool    `json:"answered"`
@@ -69,13 +75,14 @@ type Question struct {
 
 // Answer 面试回答
 type Answer struct {
-	ID          string    `json:"id"`
-	SessionID   string    `json:"session_id"`
-	QuestionID  string    `json:"question_id"`
-	InputType   string    `json:"input_type"`
-	TextContent string    `json:"text_content"`
-	DurationMs  int       `json:"duration_ms"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string                `json:"id"`
+	SessionID   string                `json:"session_id"`
+	QuestionID  string                `json:"question_id"`
+	InputType   string                `json:"input_type"`
+	TextContent string                `json:"text_content"`
+	DurationMs  int                   `json:"duration_ms"`
+	Analysis    *agent.AnswerAnalysis `json:"analysis,omitempty"`
+	CreatedAt   time.Time             `json:"created_at"`
 }
 
 // CreateSessionRequest 创建面试请求
@@ -93,6 +100,13 @@ type SubmitAnswerRequest struct {
 	QuestionID  string `json:"question_id"`
 	TextContent string `json:"text_content"`
 	DurationMs  int    `json:"duration_ms"`
+}
+
+// SubmitAnswerResult 提交回答结果（含 AI 分析与追问）
+type SubmitAnswerResult struct {
+	Answer   *Answer               `json:"answer"`
+	Analysis *agent.AnswerAnalysis `json:"analysis,omitempty"`
+	FollowUp *Question             `json:"follow_up,omitempty"`
 }
 
 // 合法的面试类型和模式

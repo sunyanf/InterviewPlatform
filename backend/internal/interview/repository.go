@@ -46,13 +46,13 @@ func (r *Repository) Create(ctx context.Context, s *Session) error {
 // GetByID 根据 ID 查询会话
 func (r *Repository) GetByID(ctx context.Context, id string) (*Session, error) {
 	var s Session
-	var configJSON string
+	var configJSON, metadataJSON string
 
 	err := r.db.QueryRow(ctx,
-		`SELECT id, user_id, job_id, COALESCE(resume_id,''), interview_type, mode, status, config::text,
+		`SELECT id, user_id, job_id, COALESCE(resume_id,''), interview_type, mode, status, config::text, metadata::text,
 		        started_at, ended_at, created_at, updated_at
 		 FROM interview_sessions WHERE id = $1`, id,
-	).Scan(&s.ID, &s.UserID, &s.JobID, &s.ResumeID, &s.InterviewType, &s.Mode, &s.Status, &configJSON,
+	).Scan(&s.ID, &s.UserID, &s.JobID, &s.ResumeID, &s.InterviewType, &s.Mode, &s.Status, &configJSON, &metadataJSON,
 		&s.StartedAt, &s.EndedAt, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -62,13 +62,14 @@ func (r *Repository) GetByID(ctx context.Context, id string) (*Session, error) {
 	}
 
 	_ = json.Unmarshal([]byte(configJSON), &s.Config)
+	_ = json.Unmarshal([]byte(metadataJSON), &s.Metadata)
 	return &s, nil
 }
 
 // ListByUserID 查询用户的面试列表
 func (r *Repository) ListByUserID(ctx context.Context, userID string) ([]Session, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT id, user_id, job_id, COALESCE(resume_id,''), interview_type, mode, status, config::text,
+		`SELECT id, user_id, job_id, COALESCE(resume_id,''), interview_type, mode, status, config::text, metadata::text,
 		        started_at, ended_at, created_at, updated_at
 		 FROM interview_sessions WHERE user_id = $1 ORDER BY created_at DESC`, userID)
 	if err != nil {
@@ -79,12 +80,13 @@ func (r *Repository) ListByUserID(ctx context.Context, userID string) ([]Session
 	var list []Session
 	for rows.Next() {
 		var s Session
-		var configJSON string
-		if err := rows.Scan(&s.ID, &s.UserID, &s.JobID, &s.ResumeID, &s.InterviewType, &s.Mode, &s.Status, &configJSON,
+		var configJSON, metadataJSON string
+		if err := rows.Scan(&s.ID, &s.UserID, &s.JobID, &s.ResumeID, &s.InterviewType, &s.Mode, &s.Status, &configJSON, &metadataJSON,
 			&s.StartedAt, &s.EndedAt, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(configJSON), &s.Config)
+		_ = json.Unmarshal([]byte(metadataJSON), &s.Metadata)
 		list = append(list, s)
 	}
 	return list, rows.Err()
@@ -123,14 +125,21 @@ func (r *Repository) CreateQuestions(ctx context.Context, sessionID string, ques
 		q := &questions[i]
 		q.ID = uuid.New().String()
 		q.SessionID = sessionID
+		if q.CreatedAt.IsZero() {
+			q.CreatedAt = time.Now()
+		}
 		expectedJSON, _ := json.Marshal(q.ExpectedPoints)
 		if q.ExpectedPoints == nil {
 			expectedJSON = []byte("[]")
 		}
+		metadataJSON, _ := json.Marshal(q.Metadata)
+		if q.Metadata == nil {
+			metadataJSON = []byte("{}")
+		}
 		batch.Queue(
-			`INSERT INTO interview_questions (id, session_id, seq, question_type, question, difficulty, source, expected_points, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
-			q.ID, q.SessionID, q.Seq, q.QuestionType, q.Question, q.Difficulty, q.Source, expectedJSON,
+			`INSERT INTO interview_questions (id, session_id, seq, question_type, question, difficulty, source, expected_points, metadata, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			q.ID, q.SessionID, q.Seq, q.QuestionType, q.Question, q.Difficulty, q.Source, expectedJSON, metadataJSON, q.CreatedAt,
 		)
 	}
 	br := r.db.SendBatch(ctx, batch)
@@ -144,11 +153,40 @@ func (r *Repository) CreateQuestions(ctx context.Context, sessionID string, ques
 	return nil
 }
 
+// GetMaxSeq 查询会话当前最大问题序号
+func (r *Repository) GetMaxSeq(ctx context.Context, sessionID string) (int, error) {
+	var maxSeq int
+	err := r.db.QueryRow(ctx,
+		`SELECT COALESCE(MAX(seq), 0) FROM interview_questions WHERE session_id = $1`, sessionID,
+	).Scan(&maxSeq)
+	return maxSeq, err
+}
+
+// UpdateSessionMetadata 更新会话元数据（如开场白）
+func (r *Repository) UpdateSessionMetadata(ctx context.Context, id string, metadata map[string]interface{}) error {
+	metadataJSON, _ := json.Marshal(metadata)
+	_, err := r.db.Exec(ctx,
+		`UPDATE interview_sessions SET metadata = $1, updated_at = NOW() WHERE id = $2`,
+		metadataJSON, id,
+	)
+	return err
+}
+
+// UpdateAnswerAnalysis 更新回答的 AI 分析结果
+func (r *Repository) UpdateAnswerAnalysis(ctx context.Context, answerID string, analysis any) error {
+	analysisJSON, _ := json.Marshal(analysis)
+	_, err := r.db.Exec(ctx,
+		`UPDATE interview_answers SET analysis = $1 WHERE id = $2`,
+		analysisJSON, answerID,
+	)
+	return err
+}
+
 // ListQuestionsBySession 查询会话的所有问题（含回答状态）
 func (r *Repository) ListQuestionsBySession(ctx context.Context, sessionID string) ([]Question, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT q.id, q.session_id, q.seq, q.question_type, q.question, q.difficulty, q.source, q.expected_points::text, q.created_at,
-		        a.id, a.input_type, a.text_content, COALESCE(a.duration_ms,0), a.created_at
+		`SELECT q.id, q.session_id, q.seq, q.question_type, q.question, q.difficulty, q.source, q.expected_points::text, q.metadata::text, q.created_at,
+		        a.id, a.input_type, a.text_content, COALESCE(a.duration_ms,0), COALESCE(a.analysis::text,'{}'), a.created_at
 		 FROM interview_questions q
 		 LEFT JOIN interview_answers a ON a.question_id = q.id
 		 WHERE q.session_id = $1 ORDER BY q.seq`, sessionID)
@@ -160,18 +198,20 @@ func (r *Repository) ListQuestionsBySession(ctx context.Context, sessionID strin
 	var list []Question
 	for rows.Next() {
 		var q Question
-		var expectedJSON string
+		var expectedJSON, metadataJSON string
 		var answerID, inputType, textContent *string
 		var answerDurationMs int
+		var answerAnalysisJSON string
 		var answerCreatedAt *time.Time
 
 		if err := rows.Scan(&q.ID, &q.SessionID, &q.Seq, &q.QuestionType, &q.Question, &q.Difficulty,
-			&q.Source, &expectedJSON, &q.CreatedAt,
-			&answerID, &inputType, &textContent, &answerDurationMs, &answerCreatedAt); err != nil {
+			&q.Source, &expectedJSON, &metadataJSON, &q.CreatedAt,
+			&answerID, &inputType, &textContent, &answerDurationMs, &answerAnalysisJSON, &answerCreatedAt); err != nil {
 			return nil, err
 		}
 
 		_ = json.Unmarshal([]byte(expectedJSON), &q.ExpectedPoints)
+		_ = json.Unmarshal([]byte(metadataJSON), &q.Metadata)
 
 		if answerID != nil {
 			q.Answered = true
@@ -185,6 +225,7 @@ func (r *Repository) ListQuestionsBySession(ctx context.Context, sessionID strin
 				DurationMs:  answerDurationMs,
 				CreatedAt:   *answerCreatedAt,
 			}
+			_ = json.Unmarshal([]byte(answerAnalysisJSON), &q.Answer.Analysis)
 		}
 		list = append(list, q)
 	}
@@ -194,13 +235,13 @@ func (r *Repository) ListQuestionsBySession(ctx context.Context, sessionID strin
 // GetQuestionByID 查询单个问题
 func (r *Repository) GetQuestionByID(ctx context.Context, id string) (*Question, error) {
 	var q Question
-	var expectedJSON string
+	var expectedJSON, metadataJSON string
 
 	err := r.db.QueryRow(ctx,
-		`SELECT id, session_id, seq, question_type, question, difficulty, source, expected_points::text, created_at
+		`SELECT id, session_id, seq, question_type, question, difficulty, source, expected_points::text, metadata::text, created_at
 		 FROM interview_questions WHERE id = $1`, id,
 	).Scan(&q.ID, &q.SessionID, &q.Seq, &q.QuestionType, &q.Question, &q.Difficulty,
-		&q.Source, &expectedJSON, &q.CreatedAt)
+		&q.Source, &expectedJSON, &metadataJSON, &q.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -209,6 +250,7 @@ func (r *Repository) GetQuestionByID(ctx context.Context, id string) (*Question,
 	}
 
 	_ = json.Unmarshal([]byte(expectedJSON), &q.ExpectedPoints)
+	_ = json.Unmarshal([]byte(metadataJSON), &q.Metadata)
 	return &q, nil
 }
 

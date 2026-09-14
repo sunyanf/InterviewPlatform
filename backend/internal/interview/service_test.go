@@ -42,22 +42,3 @@ func TestCanTransition(t *testing.T) {
 		})
 	}
 }
-
-func TestCleanJSON(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{`{"questions":[]}`, `{"questions":[]}`},
-		{"```json\n{\"questions\":[]}\n```", `{"questions":[]}`},
-		{"```\n{\"questions\":[]}\n```", `{"questions":[]}`},
-		{"  {\"questions\":[]}  ", `{"questions":[]}`},
-	}
-
-	for _, tt := range tests {
-		got := cleanJSON(tt.input)
-		if got != tt.want {
-			t.Errorf("cleanJSON(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}

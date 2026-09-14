@@ -92,13 +92,13 @@ func (h *Handler) SubmitAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	answer, err := h.svc.SubmitAnswer(r.Context(), userID, id, req)
+	result, err := h.svc.SubmitAnswer(r.Context(), userID, id, req)
 	if err != nil {
 		response.Error(w, err)
 		return
 	}
 
-	response.Created(w, answer)
+	response.Created(w, result)
 }
 
 // Finish 结束面试

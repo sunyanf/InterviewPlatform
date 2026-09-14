@@ -8,10 +8,11 @@ import "fmt"
 const (
 	// PromptQuestionPlanner 出题规划
 	// 用途：根据岗位、简历、面试类型生成结构化面试题
-	// 输入：岗位标题/技能/任职要求、候选人技能、面试类型、题数
+	// 输入：岗位标题/技能/任职要求、候选人技能、面试类型、题数、知识库参考资料（可选）
 	// 输出 Schema：{"questions":[{"question","type","difficulty","expected_points"}]}
 	// 系统约束：type/difficulty 枚举校验，业务代码归一化，不决定任何会话状态
-	PromptQuestionPlanner = "interview.question_planner.v1"
+	// v2 变更：增加知识库参考资料上下文（RAG，Week5）；无资料时行为与 v1 一致
+	PromptQuestionPlanner = "interview.question_planner.v2"
 
 	// PromptInterviewer 面试官开场
 	// 用途：生成面试开场白

@@ -11,14 +11,15 @@ import (
 
 // Config 应用配置
 type Config struct {
-	App      AppConfig
-	Server   ServerConfig
-	Database DatabaseConfig
-	Redis    RedisConfig
-	Storage  StorageConfig
-	JWT      JWTConfig
-	LLM      LLMConfig
-	Log      LogConfig
+	App       AppConfig
+	Server    ServerConfig
+	Database  DatabaseConfig
+	Redis     RedisConfig
+	Storage   StorageConfig
+	JWT       JWTConfig
+	LLM       LLMConfig
+	Embedding EmbeddingConfig
+	Log       LogConfig
 }
 
 type AppConfig struct {
@@ -77,6 +78,14 @@ type LLMConfig struct {
 	Model    string
 }
 
+type EmbeddingConfig struct {
+	Provider   string // openai / mock
+	APIKey     string
+	BaseURL    string
+	Model      string
+	Dimensions int
+}
+
 type LogConfig struct {
 	Level  string // debug / info / warn / error
 	Format string // text / json
@@ -127,6 +136,13 @@ func Load() (*Config, error) {
 			APIKey:   getEnv("LLM_API_KEY", ""),
 			BaseURL:  getEnv("LLM_BASE_URL", "https://api.openai.com/v1"),
 			Model:    getEnv("LLM_MODEL", "gpt-4o-mini"),
+		},
+		Embedding: EmbeddingConfig{
+			Provider:   getEnv("EMBEDDING_PROVIDER", "mock"),
+			APIKey:     getEnv("EMBEDDING_API_KEY", ""),
+			BaseURL:    getEnv("EMBEDDING_BASE_URL", "https://api.openai.com/v1"),
+			Model:      getEnv("EMBEDDING_MODEL", "text-embedding-3-small"),
+			Dimensions: getEnvInt("EMBEDDING_DIMENSIONS", 1536),
 		},
 		Log: LogConfig{
 			Level:  getEnv("LOG_LEVEL", "info"),

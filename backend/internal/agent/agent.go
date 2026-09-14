@@ -70,6 +70,8 @@ type PlanQuestionsInput struct {
 	ResumeSkills    []string
 	InterviewType   string
 	Count           int
+	// Knowledge 知识库参考资料（RAG 检索召回，可选；由业务层检索后传入）
+	Knowledge []string
 }
 
 // AnswerAnalysis 回答分析结果（AI 数据 Contract）

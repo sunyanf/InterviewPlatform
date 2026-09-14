@@ -13,6 +13,19 @@ func (a *Agent) PlanQuestions(ctx context.Context, in PlanQuestionsInput) ([]Pla
 		return nil, fmt.Errorf("invalid question count: %d", in.Count)
 	}
 
+	// 知识库参考资料（可选，由业务层 RAG 检索后传入）
+	knowledgeSection := ""
+	if len(in.Knowledge) > 0 {
+		var refs strings.Builder
+		for i, k := range in.Knowledge {
+			refs.WriteString(fmt.Sprintf("[%d] %s\n", i+1, k))
+		}
+		knowledgeSection = fmt.Sprintf(`
+知识库参考资料（出题依据，必须基于以下资料出题，不得编造资料中不存在的知识点）：
+%s
+`, refs.String())
+	}
+
 	prompt := fmt.Sprintf(`你是一个技术面试官。请根据以下信息生成 %d 道面试题。
 
 岗位：%s
@@ -20,7 +33,7 @@ func (a *Agent) PlanQuestions(ctx context.Context, in PlanQuestionsInput) ([]Pla
 岗位任职要求：%s
 候选人技能：%s
 面试类型：%s
-
+%s
 要求：
 1. 只返回 JSON，不要包含任何解释文字
 2. JSON 结构：{"questions":[{"question":"","type":"","difficulty":"","expected_points":[""]}]}
@@ -29,7 +42,8 @@ func (a *Agent) PlanQuestions(ctx context.Context, in PlanQuestionsInput) ([]Pla
 5. expected_points 是该题的参考答案要点，2-5 条
 6. 问题应循序渐进，覆盖岗位核心技能`,
 		in.Count, in.JobTitle, strings.Join(in.JobSkills, "、"),
-		strings.Join(in.JobRequirements, "；"), strings.Join(in.ResumeSkills, "、"), in.InterviewType)
+		strings.Join(in.JobRequirements, "；"), strings.Join(in.ResumeSkills, "、"), in.InterviewType,
+		knowledgeSection)
 
 	content, err := a.chat(ctx,
 		buildSystemPrompt("你是一个专业的技术面试官，只输出 JSON。", PromptQuestionPlanner),

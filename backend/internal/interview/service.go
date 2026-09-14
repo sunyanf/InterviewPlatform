@@ -23,22 +23,36 @@ type AgentService interface {
 	OpeningMessage(ctx context.Context, in agent.OpeningInput) (string, error)
 }
 
+// KnowledgeSnippet 出题用的知识片段（RAG 检索召回）
+type KnowledgeSnippet struct {
+	Content string `json:"content"`
+	Source  string `json:"source"`
+}
+
+// KnowledgeRetriever 知识检索能力接口（由 knowledge 模块实现，保持模块边界解耦）
+type KnowledgeRetriever interface {
+	// RetrieveForQuery 按查询检索知识片段，返回最多 topK 条
+	RetrieveForQuery(ctx context.Context, query string, topK int) ([]KnowledgeSnippet, error)
+}
+
 // Service 面试业务逻辑层
 type Service struct {
 	repo      *Repository
 	jobRepo   *job.Repository
 	resumeSvc *resume.Service
 	agent     AgentService
+	knowledge KnowledgeRetriever // 可选，nil 时不出题不接知识库
 	log       *slog.Logger
 }
 
 // NewService 创建面试 Service
-func NewService(repo *Repository, jobRepo *job.Repository, resumeSvc *resume.Service, agentSvc AgentService, log *slog.Logger) *Service {
+func NewService(repo *Repository, jobRepo *job.Repository, resumeSvc *resume.Service, agentSvc AgentService, knowledge KnowledgeRetriever, log *slog.Logger) *Service {
 	return &Service{
 		repo:      repo,
 		jobRepo:   jobRepo,
 		resumeSvc: resumeSvc,
 		agent:     agentSvc,
+		knowledge: knowledge,
 		log:       log,
 	}
 }
@@ -164,6 +178,21 @@ func (s *Service) Start(ctx context.Context, userID, sessionID string) (*Session
 		}
 	}
 
+	// RAG 知识检索（尽力而为：检索失败不出题不阻塞开考）
+	var knowledgeRefs []string
+	if s.knowledge != nil {
+		knowledgeQuery := strings.Join(append([]string{j.Title}, j.Skills...), " ")
+		snippets, err := s.knowledge.RetrieveForQuery(ctx, knowledgeQuery, 5)
+		if err != nil {
+			s.log.Warn("knowledge retrieval failed", "session_id", sessionID, "error", err)
+		} else {
+			for _, sn := range snippets {
+				knowledgeRefs = append(knowledgeRefs, sn.Content)
+			}
+			s.log.Info("knowledge retrieved for session", "session_id", sessionID, "snippets", len(knowledgeRefs))
+		}
+	}
+
 	// Agent 出题规划（LLM 只生成内容，不决定状态）
 	planned, err := s.agent.PlanQuestions(ctx, agent.PlanQuestionsInput{
 		JobTitle:        j.Title,
@@ -172,6 +201,7 @@ func (s *Service) Start(ctx context.Context, userID, sessionID string) (*Session
 		ResumeSkills:    resumeSkills,
 		InterviewType:   sess.InterviewType,
 		Count:           sess.Config.QuestionCount,
+		Knowledge:       knowledgeRefs,
 	})
 	if err != nil {
 		s.log.Error("plan questions failed", "session_id", sessionID, "error", err)

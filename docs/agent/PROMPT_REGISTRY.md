@@ -15,7 +15,7 @@ Prompt 必须像代码一样管理。
 例如：
 
 ```text
-interview.question_planner.v1
+interview.question_planner.v1 → v2（Week5：出题增加 RAG 知识库参考资料，无资料时行为与 v1 一致）
 interview.interviewer.v1
 interview.follow_up.v1
 interview.answer_analyzer.v1

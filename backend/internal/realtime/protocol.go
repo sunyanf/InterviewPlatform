@@ -16,6 +16,7 @@ const (
 	typeFollowUp    = "follow_up"    // 产生追问问题
 	typeChatDelta   = "chat_delta"   // 实时对话增量
 	typeChatDone    = "chat_done"    // 实时对话结束
+	typeChatSpeech  = "chat_speech"  // 实时对话回复的语音合成结果（请求 tts=true 时在 chat_done 前下发）
 	typePong        = "pong"
 	typeError       = "error"
 )
@@ -43,6 +44,8 @@ type ChatTurn struct {
 type ChatMessage struct {
 	Message string     `json:"message"`
 	History []ChatTurn `json:"history,omitempty"`
+	// TTS 为 true 时，回复结束后额外下发一条 chat_speech 事件（合成语音下载 URL）
+	TTS bool `json:"tts,omitempty"`
 }
 
 // ErrorData S→C 错误事件数据
@@ -54,6 +57,16 @@ type ErrorData struct {
 // ChatDeltaData S→C 对话增量
 type ChatDeltaData struct {
 	Delta string `json:"delta"`
+}
+
+// ChatSpeechData S→C 对话回复语音合成结果
+type ChatSpeechData struct {
+	DownloadURL           string `json:"download_url"`
+	Format                string `json:"format"`
+	ContentType           string `json:"content_type"`
+	SizeBytes             int64  `json:"size_bytes"`
+	Cached                bool   `json:"cached"`
+	DownloadExpireSeconds int    `json:"download_expire_seconds"`
 }
 
 // marshalEvent 将类型与数据组装为 JSON 帧（数据序列化失败时返回错误帧）

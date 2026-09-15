@@ -15,6 +15,7 @@ import (
 
 	"ai-interview-platform/internal/agent"
 	"ai-interview-platform/internal/interview"
+	ttssvc "ai-interview-platform/internal/tts"
 	apperrors "ai-interview-platform/pkg/errors"
 	"ai-interview-platform/pkg/jwt"
 	"ai-interview-platform/pkg/llm"
@@ -36,23 +37,30 @@ type ChatAgent interface {
 	ChatInterviewer(ctx context.Context, in agent.RealtimeChatInput) (<-chan agent.RealtimeChatEvent, error)
 }
 
+// SpeechSynthesizer 实时对话回复的语音合成能力（生产由 *tts.Service 满足，可为 nil）
+type SpeechSynthesizer interface {
+	SynthesizeForSession(ctx context.Context, userID, sessionID, text string) (*ttssvc.SpeechResult, error)
+}
+
 // Handler WebSocket 实时面试处理器
 type Handler struct {
 	jwtMgr *jwt.Manager
 	svc    InterviewService
 	agent  ChatAgent
+	speech SpeechSynthesizer
 	hubs   *HubManager
 	log    *slog.Logger
 
 	upgrader websocket.Upgrader
 }
 
-// NewHandler 创建实时面试 Handler
-func NewHandler(jwtMgr *jwt.Manager, svc InterviewService, ag ChatAgent, log *slog.Logger) *Handler {
+// NewHandler 创建实时面试 Handler。speech 传 nil 时，chat 消息的 tts 选项会返回 TTS_UNAVAILABLE。
+func NewHandler(jwtMgr *jwt.Manager, svc InterviewService, ag ChatAgent, speech SpeechSynthesizer, log *slog.Logger) *Handler {
 	return &Handler{
 		jwtMgr: jwtMgr,
 		svc:    svc,
 		agent:  ag,
+		speech: speech,
 		hubs:   NewHubManager(),
 		log:    log,
 		upgrader: websocket.Upgrader{
@@ -249,21 +257,57 @@ func (h *Handler) handleChat(ctx context.Context, c *Client, sess *interview.Ses
 		}
 	}()
 
+	var replyBuilder strings.Builder
 	for ev := range events {
 		if ev.Err != nil {
 			h.log.Warn("realtime chat stream failed", "session_id", sess.ID, "error", ev.Err)
 			return c.sendFrame(marshalEvent(typeError, ErrorData{Code: "LLM_STREAM_ERROR", Message: "实时对话生成失败"}))
 		}
+		replyBuilder.WriteString(ev.Delta)
 		if !c.sendFrame(marshalEvent(typeChatDelta, ChatDeltaData{Delta: ev.Delta})) {
 			cancel()
 			return false
 		}
 	}
+
+	// 请求语音：合成整段回复（合成失败不影响文字结果，发 error 事件后仍正常结束）
+	// chat_speech 在 chat_done 之前下发，客户端以 chat_done 作为本轮终结信号
+	if msg.TTS {
+		if !h.sendChatSpeech(ctx, c, sess, strings.TrimSpace(replyBuilder.String())) {
+			return false
+		}
+	}
+
 	if !c.sendFrame(marshalEvent(typeChatDone, struct{}{})) {
 		return false
 	}
-	h.log.Info("realtime chat streamed", "session_id", sess.ID, "input_chars", msgLen)
+	h.log.Info("realtime chat streamed", "session_id", sess.ID,
+		"input_chars", msgLen, "tts_requested", msg.TTS)
 	return true
+}
+
+// sendChatSpeech 合成并推送对话回复语音，返回 false 表示连接已失效
+func (h *Handler) sendChatSpeech(ctx context.Context, c *Client, sess *interview.Session, replyText string) bool {
+	if h.speech == nil {
+		return c.sendFrame(marshalEvent(typeError, ErrorData{Code: "TTS_UNAVAILABLE", Message: "服务未启用语音合成"}))
+	}
+	if replyText == "" {
+		return c.sendFrame(marshalEvent(typeError, ErrorData{Code: "TTS_EMPTY_REPLY", Message: "回复为空，无法合成语音"}))
+	}
+
+	res, err := h.speech.SynthesizeForSession(ctx, c.userID, sess.ID, replyText)
+	if err != nil {
+		h.log.Warn("realtime chat tts failed", "session_id", sess.ID, "error", err)
+		return c.sendFrame(marshalEvent(typeError, toErrorData(err)))
+	}
+	return c.sendFrame(marshalEvent(typeChatSpeech, ChatSpeechData{
+		DownloadURL:           res.DownloadURL,
+		Format:                res.Format,
+		ContentType:           res.ContentType,
+		SizeBytes:             res.SizeBytes,
+		Cached:                res.Cached,
+		DownloadExpireSeconds: res.DownloadExpireSeconds,
+	}))
 }
 
 // toErrorData 将业务错误映射为 WS 错误事件数据

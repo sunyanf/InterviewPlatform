@@ -22,6 +22,8 @@ type Storage interface {
 	Download(ctx context.Context, key string) (io.ReadCloser, error)
 	// GetSignedURL 获取临时访问 URL
 	GetSignedURL(ctx context.Context, key string, expire time.Duration) (string, error)
+	// Exists 判断对象是否存在
+	Exists(ctx context.Context, key string) (bool, error)
 	// Delete 删除文件
 	Delete(ctx context.Context, key string) error
 }

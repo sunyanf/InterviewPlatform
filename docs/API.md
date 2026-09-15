@@ -258,6 +258,40 @@ GET  /api/v1/answers/:questionID/audio             查询语音详情（含指�
 
 ---
 
+# 5.9 面试官语音（TTS）
+
+需要鉴权。将面试官侧文本（开场白、面试问题、实时对话回复）合成为语音。
+音频不直接返回二进制，而是存入对象存储后下发 **15 分钟预签名 URL**；
+合成结果按 `provider + model + voice + format + 文本` 内容寻址缓存，重复请求不再次调用付费 Provider。
+
+```text
+GET /api/v1/interviews/{id}/speech/opening                          合成开场白语音
+GET /api/v1/interviews/{id}/questions/{questionID}/speech           合成指定问题语音
+```
+
+错误语义：跨用户 403；开场白不存在 404 `OPENING_NOT_AVAILABLE`；问题不属于该面试 404 `QUESTION_NOT_FOUND`；
+文本超长 400 `SPEECH_TEXT_TOO_LONG`（上限 2000 字）；Provider 失败 502 `TTS_SYNTHESIZE_FAILED`。
+
+响应示例：
+
+```json
+{
+  "text": "你好，欢迎参加本次面试……",
+  "download_url": "https://…presigned…",
+  "format": "mp3",
+  "content_type": "audio/mpeg",
+  "size_bytes": 24576,
+  "cached": false,
+  "download_expire_seconds": 900
+}
+```
+
+配置（环境变量）：`TTS_PROVIDER`（mock/openai，默认 mock 输出确定性 400ms WAV 正弦波）、
+`TTS_API_KEY`、`TTS_BASE_URL`、`TTS_MODEL`（默认 tts-1）、`TTS_VOICE`（默认 alloy）、
+`TTS_FORMAT`（默认 mp3；mock 固定输出 wav）。
+
+---
+
 # 6. WebSocket 实时面试
 
 ```text
@@ -299,6 +333,7 @@ GET /api/v1/interviews/{id}/ws?token={JWT}
   "type": "chat",
   "data": {
     "message": "能给点提示吗？",
+    "tts": true,
     "history": [
       { "role": "user", "content": "上一轮发言" },
       { "role": "assistant", "content": "上一轮面试官回复" }
@@ -309,6 +344,8 @@ GET /api/v1/interviews/{id}/ws?token={JWT}
 
 `history` 为可选的本连接内对话历史（最多保留 20 条，服务端只接受 user/assistant 角色）。
 实时对话不改变任何会话状态、不持久化、不进入评估。
+可选 `tts: true` 请求对整段回复合成语音：所有 `chat_delta` 推送完毕后、`chat_done` 之前，
+额外下发一条 `chat_speech` 事件（含 15 分钟预签名下载 URL）；合成失败只发 `error` 事件，文字流仍正常以 `chat_done` 结束。
 
 ### 心跳
 
@@ -325,13 +362,15 @@ GET /api/v1/interviews/{id}/ws?token={JWT}
 | `analysis` | AnswerAnalysis | answer 处理：AI 分析完成（可为空不推） |
 | `follow_up` | Question | answer 处理：产生追问问题（可为空不推） |
 | `chat_delta` | `{"delta":"..."}` | 实时对话 token 增量 |
+| `chat_speech` | `{"download_url":"…","format":"mp3","content_type":"audio/mpeg","size_bytes":24576,"cached":false,"download_expire_seconds":900}` | chat 请求 `tts:true`：回复语音合成结果（在 chat_done 前下发） |
 | `chat_done` | `{}` | 实时对话流结束 |
 | `pong` | `{}` | 响应客户端 ping |
 | `error` | `{"code":"...","message":"..."}` | 业务错误（连接保持，可继续） |
 
 `error` 常见 code：`BAD_REQUEST`、`EMPTY_MESSAGE`、`MESSAGE_TOO_LONG`、
 `SESSION_NOT_RUNNING`、`ALREADY_ANSWERED`、`INVALID_STATE_TRANSITION`、
-`LLM_STREAM_ERROR`、`UNKNOWN_MESSAGE_TYPE`。
+`LLM_STREAM_ERROR`、`UNKNOWN_MESSAGE_TYPE`、
+`TTS_UNAVAILABLE`（服务未配置合成能力）、`TTS_EMPTY_REPLY`、`TTS_SYNTHESIZE_FAILED`。
 
 close code：`4000` 被新连接顶替；`4001` 服务端主动关闭（如发送缓冲溢出）。
 

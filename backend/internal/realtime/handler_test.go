@@ -17,6 +17,7 @@ import (
 	"ai-interview-platform/internal/agent"
 	"ai-interview-platform/internal/config"
 	"ai-interview-platform/internal/interview"
+	ttssvc "ai-interview-platform/internal/tts"
 	apperrors "ai-interview-platform/pkg/errors"
 	"ai-interview-platform/pkg/jwt"
 )
@@ -73,6 +74,20 @@ func (f *fakeAgent) ChatInterviewer(ctx context.Context, in agent.RealtimeChatIn
 	return ch, nil
 }
 
+type fakeSpeech struct {
+	res     *ttssvc.SpeechResult
+	err     error
+	gotText string
+}
+
+func (f *fakeSpeech) SynthesizeForSession(ctx context.Context, userID, sessionID, text string) (*ttssvc.SpeechResult, error) {
+	f.gotText = text
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.res, nil
+}
+
 // ---------- helpers ----------
 
 func testJWTManager() *jwt.Manager {
@@ -80,8 +95,12 @@ func testJWTManager() *jwt.Manager {
 }
 
 func newTestServer(svc InterviewService, ag ChatAgent) (*httptest.Server, *jwt.Manager) {
+	return newTestServerWithSpeech(svc, ag, nil)
+}
+
+func newTestServerWithSpeech(svc InterviewService, ag ChatAgent, sp SpeechSynthesizer) (*httptest.Server, *jwt.Manager) {
 	mgr := testJWTManager()
-	h := NewHandler(mgr, svc, ag, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := NewHandler(mgr, svc, ag, sp, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	r := chi.NewRouter()
 	r.Get("/api/v1/interviews/{id}/ws", h.HandleWS)
 	return httptest.NewServer(r), mgr
@@ -331,5 +350,109 @@ func TestWS_ReconnectReplacesOldConnection(t *testing.T) {
 	ce, ok := err.(*websocket.CloseError)
 	if !ok || ce.Code != closeReplaced {
 		t.Fatalf("A want close %d, got %v", closeReplaced, err)
+	}
+}
+
+// ---------- TTS ----------
+
+func TestWS_ChatWithTTS(t *testing.T) {
+	ag := &fakeAgent{deltas: []string{"你好", "，请介绍项目"}}
+	sp := &fakeSpeech{res: &ttssvc.SpeechResult{
+		DownloadURL: "https://signed/x.wav", Format: "wav", ContentType: "audio/wav",
+		SizeBytes: 128, Cached: true, DownloadExpireSeconds: 900,
+	}}
+	srv, mgr := newTestServerWithSpeech(&fakeService{sess: runningSession()}, ag, sp)
+	defer srv.Close()
+
+	token, _ := mgr.Generate("u1", "a@b.com")
+	conn := mustDial(t, srv, "s1", token)
+	defer conn.Close()
+	readEnvelope(t, conn) // snapshot
+
+	writeEnvelope(t, conn, typeChat, ChatMessage{Message: "开始吧", TTS: true})
+
+	// deltas...
+	var gotDeltas strings.Builder
+	for {
+		env := readEnvelope(t, conn)
+		if env.Type == typeChatSpeech {
+			var data ChatSpeechData
+			if err := json.Unmarshal(env.Data, &data); err != nil {
+				t.Fatalf("speech data: %v", err)
+			}
+			if data.DownloadURL != "https://signed/x.wav" || data.Format != "wav" || data.DownloadExpireSeconds != 900 {
+				t.Fatalf("speech data = %+v", data)
+			}
+			break
+		}
+		if env.Type != typeChatDelta {
+			t.Fatalf("got %s before chat_speech", env.Type)
+		}
+		var d ChatDeltaData
+		json.Unmarshal(env.Data, &d)
+		gotDeltas.WriteString(d.Delta)
+	}
+	if gotDeltas.String() != "你好，请介绍项目" {
+		t.Fatalf("deltas = %q", gotDeltas.String())
+	}
+	// 合成入参为完整回复（非分片）
+	if sp.gotText != "你好，请介绍项目" {
+		t.Fatalf("speech input = %q", sp.gotText)
+	}
+	// chat_speech 之后必须以 chat_done 终结
+	if env := readEnvelope(t, conn); env.Type != typeChatDone {
+		t.Fatalf("got %s, want chat_done", env.Type)
+	}
+}
+
+func TestWS_ChatTTSUnavailable(t *testing.T) {
+	ag := &fakeAgent{deltas: []string{"回复"}}
+	// newTestServer 不注入 speech
+	srv, mgr := newTestServer(&fakeService{sess: runningSession()}, ag)
+	defer srv.Close()
+
+	token, _ := mgr.Generate("u1", "a@b.com")
+	conn := mustDial(t, srv, "s1", token)
+	defer conn.Close()
+	readEnvelope(t, conn)
+
+	writeEnvelope(t, conn, typeChat, ChatMessage{Message: "hi", TTS: true})
+	env := readEnvelope(t, conn) // chat_delta
+	if env.Type != typeChatDelta {
+		t.Fatalf("got %s, want chat_delta", env.Type)
+	}
+	env = readEnvelope(t, conn) // error（未启用 TTS）
+	var ed ErrorData
+	json.Unmarshal(env.Data, &ed)
+	if env.Type != typeError || ed.Code != "TTS_UNAVAILABLE" {
+		t.Fatalf("got type=%s code=%s", env.Type, ed.Code)
+	}
+	// 语音失败不影响本轮终结
+	if env := readEnvelope(t, conn); env.Type != typeChatDone {
+		t.Fatalf("got %s, want chat_done", env.Type)
+	}
+}
+
+func TestWS_ChatTTSFailure(t *testing.T) {
+	ag := &fakeAgent{deltas: []string{"回复"}}
+	sp := &fakeSpeech{err: apperrors.New("TTS_SYNTHESIZE_FAILED", "语音合成失败", 502)}
+	srv, mgr := newTestServerWithSpeech(&fakeService{sess: runningSession()}, ag, sp)
+	defer srv.Close()
+
+	token, _ := mgr.Generate("u1", "a@b.com")
+	conn := mustDial(t, srv, "s1", token)
+	defer conn.Close()
+	readEnvelope(t, conn)
+
+	writeEnvelope(t, conn, typeChat, ChatMessage{Message: "hi", TTS: true})
+	readEnvelope(t, conn) // chat_delta
+	env := readEnvelope(t, conn)
+	var ed ErrorData
+	json.Unmarshal(env.Data, &ed)
+	if env.Type != typeError || ed.Code != "TTS_SYNTHESIZE_FAILED" {
+		t.Fatalf("got type=%s data=%s", env.Type, env.Data)
+	}
+	if env := readEnvelope(t, conn); env.Type != typeChatDone {
+		t.Fatalf("got %s, want chat_done", env.Type)
 	}
 }

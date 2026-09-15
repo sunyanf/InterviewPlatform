@@ -19,6 +19,7 @@ type Config struct {
 	JWT       JWTConfig
 	LLM       LLMConfig
 	ASR       ASRConfig
+	TTS       TTSConfig
 	Embedding EmbeddingConfig
 	Log       LogConfig
 }
@@ -87,6 +88,15 @@ type ASRConfig struct {
 	Language string // 默认转写语言（zh / en），空为自动检测
 }
 
+type TTSConfig struct {
+	Provider string // openai / mock
+	APIKey   string
+	BaseURL  string
+	Model    string // tts-1 / tts-1-hd
+	Voice    string // alloy / echo / fable / onyx / nova / shimmer
+	Format   string // mp3 / wav / opus / aac / flac
+}
+
 type EmbeddingConfig struct {
 	Provider   string // openai / mock
 	APIKey     string
@@ -152,6 +162,14 @@ func Load() (*Config, error) {
 			BaseURL:  getEnv("ASR_BASE_URL", "https://api.openai.com/v1"),
 			Model:    getEnv("ASR_MODEL", "whisper-1"),
 			Language: getEnv("ASR_LANGUAGE", "zh"),
+		},
+		TTS: TTSConfig{
+			Provider: getEnv("TTS_PROVIDER", "mock"),
+			APIKey:   getEnv("TTS_API_KEY", ""),
+			BaseURL:  getEnv("TTS_BASE_URL", "https://api.openai.com/v1"),
+			Model:    getEnv("TTS_MODEL", "tts-1"),
+			Voice:    getEnv("TTS_VOICE", "alloy"),
+			Format:   getEnv("TTS_FORMAT", "mp3"),
 		},
 		Embedding: EmbeddingConfig{
 			Provider:   getEnv("EMBEDDING_PROVIDER", "mock"),

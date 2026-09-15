@@ -72,3 +72,14 @@ func (m *MinIOStorage) GetSignedURL(ctx context.Context, key string, expire time
 func (m *MinIOStorage) Delete(ctx context.Context, key string) error {
 	return m.client.RemoveObject(ctx, m.bucket, key, minio.RemoveObjectOptions{})
 }
+
+// Exists 判断对象是否存在
+func (m *MinIOStorage) Exists(ctx context.Context, key string) (bool, error) {
+	if _, err := m.client.StatObject(ctx, m.bucket, key, minio.StatObjectOptions{}); err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}

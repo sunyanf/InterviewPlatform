@@ -21,12 +21,14 @@ import (
 	"ai-interview-platform/internal/realtime"
 	"ai-interview-platform/internal/report"
 	"ai-interview-platform/internal/resume"
+	ttssvc "ai-interview-platform/internal/tts"
 	"ai-interview-platform/internal/user"
 	"ai-interview-platform/pkg/asr"
 	"ai-interview-platform/pkg/embedding"
 	"ai-interview-platform/pkg/jwt"
 	"ai-interview-platform/pkg/llm"
 	"ai-interview-platform/pkg/storage"
+	provider "ai-interview-platform/pkg/tts"
 )
 
 // Server HTTP 服务器
@@ -39,6 +41,7 @@ type Server struct {
 	llm       llm.Provider
 	embedder  embedding.Embedder
 	asr       asr.ASR
+	ttsProv   provider.TTS
 	resumeSvc *resume.Service
 	agent     *agent.Agent
 	http      *http.Server
@@ -72,6 +75,16 @@ func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Man
 	}
 	s.asr = asrProv
 	log.Info("asr provider initialized", "provider", asrProv.Name())
+
+	// 初始化 TTS Provider（面试官语音合成）
+	ttsProv, err := provider.NewTTS(cfg.TTS)
+	if err != nil {
+		log.Error("init tts provider failed", "error", err)
+		panic(err)
+	}
+	s.ttsProv = ttsProv
+	log.Info("tts provider initialized", "provider", ttsProv.Name(),
+		"model", cfg.TTS.Model, "voice", cfg.TTS.Voice, "format", cfg.TTS.Format)
 
 	// 共享的简历 Service（面试模块依赖）
 	resumeRepo := resume.NewRepository(db)
@@ -142,6 +155,10 @@ func (s *Server) routes() http.Handler {
 			r.Post("/interviews/{id}/start", s.interviewHandler().Start)
 			r.Post("/interviews/{id}/answer", s.interviewHandler().SubmitAnswer)
 			r.Post("/interviews/{id}/finish", s.interviewHandler().Finish)
+
+			// 面试官语音（TTS）
+			r.Get("/interviews/{id}/speech/opening", s.ttsHandler().Opening)
+			r.Get("/interviews/{id}/questions/{questionID}/speech", s.ttsHandler().Question)
 
 			// 知识库（RAG）
 			r.Post("/knowledge/documents", s.knowledgeHandler().Create)
@@ -233,12 +250,27 @@ func (s *Server) audioHandler() *audio.Handler {
 
 // realtimeHandler 初始化 WebSocket 实时面试 Handler
 func (s *Server) realtimeHandler() *realtime.Handler {
+	svc := s.newInterviewService()
+	speech := ttssvc.NewService(svc, s.ttsProv, s.storage,
+		s.cfg.TTS.Model, s.cfg.TTS.Voice, s.cfg.TTS.Format, s.log)
+	return realtime.NewHandler(s.jwtMgr, svc, s.agent, speech, s.log)
+}
+
+// ttsHandler 初始化面试官语音（TTS）Handler
+func (s *Server) ttsHandler() *ttssvc.Handler {
+	svc := s.newInterviewService()
+	speech := ttssvc.NewService(svc, s.ttsProv, s.storage,
+		s.cfg.TTS.Model, s.cfg.TTS.Voice, s.cfg.TTS.Format, s.log)
+	return ttssvc.NewHandler(speech)
+}
+
+// newInterviewService 构造面试 Service（含 RAG 检索器）
+func (s *Server) newInterviewService() *interview.Service {
 	repo := interview.NewRepository(s.db)
 	jobRepo := job.NewRepository(s.db)
 	knowledgeRepo := knowledge.NewRepository(s.db)
 	knowledgeSvc := knowledge.NewService(knowledgeRepo, s.embedder, s.log)
-	svc := interview.NewService(repo, jobRepo, s.resumeSvc, s.agent, knowledgeRetriever{knowledgeSvc}, s.log)
-	return realtime.NewHandler(s.jwtMgr, svc, s.agent, s.log)
+	return interview.NewService(repo, jobRepo, s.resumeSvc, s.agent, knowledgeRetriever{knowledgeSvc}, s.log)
 }
 
 // knowledgeRetriever 将 knowledge.Service 适配为 interview.KnowledgeRetriever

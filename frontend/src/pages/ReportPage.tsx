@@ -20,6 +20,8 @@ export default function ReportPage() {
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null)
   const [report, setReport] = useState<Report | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
+  // 失败后点击「重新生成」递增 nonce，重新跑一遍评估/报告流水线
+  const [nonce, setNonce] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -76,14 +78,29 @@ export default function ReportPage() {
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [id, nonce])
+
+  const retry = () => {
+    setErrorMsg('')
+    setEvaluation(null)
+    setReport(null)
+    setPhase('evaluating')
+    setNonce((n) => n + 1)
+  }
 
   if (phase === 'error') {
     return (
       <main className="shell" style={{ paddingTop: 80, textAlign: 'center' }}>
         <h1 style={{ fontSize: 26, marginBottom: 12 }}>评卷遇到问题</h1>
         <p className="muted" style={{ marginBottom: 24 }}>{errorMsg}</p>
-        <Link to="/" className="btn btn-primary">返回我的面试</Link>
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+          <button className="btn btn-primary" onClick={retry}>
+            重新生成
+          </button>
+          <Link to="/" className="btn btn-ghost">
+            返回我的面试
+          </Link>
+        </div>
       </main>
     )
   }

@@ -105,3 +105,27 @@ go vet ./...
 ```
 
 视项目工具配置继续运行 lint。
+
+---
+
+# 8. E2E（Playwright）
+
+前端 `frontend/e2e/` 固化两条主链路：
+
+- happy path：注册 → 选岗 → 上传简历 → 建面试 → 逐题作答 → 结束 → 评估报告；
+- 失败态：评估失败时报告页展示错误态，「重新生成」会重新发起评估请求。
+
+本地运行（后端 :8080 + PostgreSQL + MinIO 需已启动）：
+
+```bash
+cd frontend
+npm ci
+npx playwright install chromium
+npx playwright test                 # 自动拉起/复用 5173 dev server
+# 或指向已运行的前端：
+$env:E2E_BASE_URL="http://localhost:5174"; npx playwright test   # PowerShell
+E2E_BASE_URL=http://localhost:5174 npx playwright test           # bash
+```
+
+CI（`.github/workflows/ci.yml` 的 `e2e` job）自动启动 pgvector 与 MinIO 服务、
+执行迁移并运行全栈用例；产物（backend 日志、playwright-report）在失败时上传 artifact。

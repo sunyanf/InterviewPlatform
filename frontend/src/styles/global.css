@@ -1,0 +1,502 @@
+/* ============================================================
+   AI 面试模拟平台 · 「深夜考官室」设计系统
+   墨黑底 / 暖琥珀金 / 翡翠绿 / 陶土红
+   ============================================================ */
+
+:root {
+  /* 色板 */
+  --bg: #0c0f13;
+  --bg-2: #12171e;
+  --bg-3: #192029;
+  --bg-elev: #1f2833;
+  --line: rgba(233, 228, 216, 0.09);
+  --line-strong: rgba(233, 228, 216, 0.18);
+
+  --ink: #ece6d8;
+  --ink-2: #a9a294;
+  --ink-3: #6d685d;
+
+  --accent: #d9a441;
+  --accent-soft: rgba(217, 164, 65, 0.14);
+  --accent-ink: #1a1305;
+  --jade: #5fbf8f;
+  --jade-soft: rgba(95, 191, 143, 0.13);
+  --clay: #d97060;
+  --clay-soft: rgba(217, 112, 96, 0.13);
+  --sky: #7aa2c7;
+
+  /* 字体 */
+  --font-display: 'Fraunces', 'Noto Serif SC', 'Songti SC', 'SimSun', serif;
+  --font-body: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Cascadia Code', Consolas, monospace;
+
+  /* 形状与投影 */
+  --radius-s: 6px;
+  --radius-m: 12px;
+  --radius-l: 20px;
+  --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 18px 50px rgba(0, 0, 0, 0.55);
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 大气背景：细噪点 + 顶部微光 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(1100px 480px at 78% -12%, rgba(217, 164, 65, 0.08), transparent 62%),
+    radial-gradient(900px 520px at 8% -8%, rgba(122, 162, 199, 0.06), transparent 60%);
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.025 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: opacity 0.2s var(--ease);
+}
+a:hover {
+  opacity: 0.82;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--ink);
+}
+
+::selection {
+  background: rgba(217, 164, 65, 0.28);
+}
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a323d;
+  border-radius: 8px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #38424f;
+}
+
+/* ---------- 通用元素 ---------- */
+.card {
+  background: linear-gradient(180deg, var(--bg-2), var(--bg-2) 60%, #10141a);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-1);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 22px;
+  border-radius: var(--radius-s);
+  border: 1px solid transparent;
+  font-size: 14.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  transition:
+    transform 0.18s var(--ease),
+    background 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease);
+  user-select: none;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: linear-gradient(180deg, #e3b25280, #d9a441 55%, #c08f2f);
+  background-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+  box-shadow: 0 6px 18px rgba(217, 164, 65, 0.22);
+}
+.btn-primary:hover:not(:disabled) {
+  box-shadow: 0 8px 26px rgba(217, 164, 65, 0.34);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--ink-2);
+  border-color: var(--line-strong);
+}
+.btn-ghost:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: rgba(233, 228, 216, 0.32);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.btn-jade {
+  background: var(--jade-soft);
+  color: var(--jade);
+  border-color: rgba(95, 191, 143, 0.35);
+}
+.btn-jade:hover:not(:disabled) {
+  background: rgba(95, 191, 143, 0.2);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.field label {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  letter-spacing: 0.08em;
+}
+.input {
+  width: 100%;
+  padding: 12px 14px;
+  background: #0e1319;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  color: var(--ink);
+  outline: none;
+  transition:
+    border-color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease);
+}
+.input::placeholder {
+  color: var(--ink-3);
+}
+.input:focus {
+  border-color: rgba(217, 164, 65, 0.55);
+  box-shadow: 0 0 0 3px rgba(217, 164, 65, 0.12);
+}
+textarea.input {
+  resize: vertical;
+  min-height: 96px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-2);
+}
+.tag-accent {
+  color: var(--accent);
+  border-color: rgba(217, 164, 65, 0.4);
+  background: var(--accent-soft);
+}
+.tag-jade {
+  color: var(--jade);
+  border-color: rgba(95, 191, 143, 0.35);
+  background: var(--jade-soft);
+}
+.tag-clay {
+  color: var(--clay);
+  border-color: rgba(217, 112, 96, 0.35);
+  background: var(--clay-soft);
+}
+
+.muted {
+  color: var(--ink-2);
+}
+.dim {
+  color: var(--ink-3);
+}
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* 状态提示 */
+.notice {
+  padding: 10px 14px;
+  border-radius: var(--radius-s);
+  font-size: 13.5px;
+  border: 1px solid;
+}
+.notice-error {
+  color: #e8a094;
+  background: var(--clay-soft);
+  border-color: rgba(217, 112, 96, 0.35);
+}
+.notice-info {
+  color: var(--sky);
+  background: rgba(122, 162, 199, 0.1);
+  border-color: rgba(122, 162, 199, 0.3);
+}
+
+/* 布局骨架 */
+.shell {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 28px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 66px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(12, 15, 19, 0.82);
+  backdrop-filter: blur(14px);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-size: 19px;
+  color: var(--ink);
+}
+.brand .mark {
+  color: var(--accent);
+  font-size: 22px;
+}
+.brand small {
+  font-family: var(--font-body);
+  font-size: 11px;
+  letter-spacing: 0.32em;
+  color: var(--ink-3);
+}
+
+/* 入场 */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise {
+  animation: rise 0.55s var(--ease) both;
+}
+.rise-1 { animation-delay: 0.06s; }
+.rise-2 { animation-delay: 0.14s; }
+.rise-3 { animation-delay: 0.22s; }
+.rise-4 { animation-delay: 0.3s; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+.dot-live {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--jade);
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 860px) {
+  .auth-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .auth-grid > section:first-child {
+    border-right: none !important;
+    border-bottom: 1px solid var(--line);
+    padding: 48px 28px 32px !important;
+  }
+  .shell {
+    padding: 0 18px;
+  }
+  .prepare-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ---------- 面试间 ---------- */
+.iv-layout {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr) 350px;
+  gap: 16px;
+  height: calc(100vh - 0px);
+  padding: 14px;
+}
+@media (max-width: 1080px) {
+  .iv-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .report-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+.iv-panel {
+  background: linear-gradient(180deg, var(--bg-2), #0f141a);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.iv-chat-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bubble {
+  max-width: 88%;
+  padding: 11px 15px;
+  border-radius: 14px;
+  font-size: 14.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.bubble-candidate {
+  align-self: flex-end;
+  background: rgba(122, 162, 199, 0.14);
+  border: 1px solid rgba(122, 162, 199, 0.28);
+  border-bottom-right-radius: 4px;
+}
+.bubble-interviewer {
+  align-self: flex-start;
+  background: var(--bg-3);
+  border: 1px solid var(--line-strong);
+  border-bottom-left-radius: 4px;
+}
+
+.streaming-caret::after {
+  content: '▌';
+  color: var(--accent);
+  animation: pulse-dot 1s steps(2) infinite;
+  margin-left: 2px;
+}
+
+.q-dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  flex-shrink: 0;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-2);
+}
+.q-dot-done {
+  background: var(--jade-soft);
+  border-color: rgba(95, 191, 143, 0.4);
+  color: var(--jade);
+}
+.q-dot-active {
+  background: var(--accent-soft);
+  border-color: rgba(217, 164, 65, 0.55);
+  color: var(--accent);
+}
+
+.analysis-box {
+  border-radius: var(--radius-s);
+  padding: 14px 16px;
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+.analysis-good {
+  background: var(--jade-soft);
+  border: 1px solid rgba(95, 191, 143, 0.3);
+}
+.analysis-gap {
+  background: rgba(217, 164, 65, 0.08);
+  border: 1px solid rgba(217, 164, 65, 0.28);
+}

@@ -69,6 +69,26 @@ func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse
 		}, nil
 	}
 
+	// 语音表达分析 mock 输出
+	if contains(lastMsg, "口头表达能力") {
+		mockSpeech := map[string]interface{}{
+			"strengths": []string{"核心概念表述清晰准确"},
+			"issues":    []string{"口头禅较多，影响表达流畅度"},
+			"suggestions": []string{
+				"回答前先在心里列出 2-3 个要点，先结论后展开",
+				"用停顿替代嗯、呃等口头禅",
+				"控制语速在每分钟 200 字左右",
+			},
+		}
+		data, _ := json.Marshal(mockSpeech)
+		return &ChatResponse{
+			Content:      string(data),
+			Model:        "mock",
+			InputTokens:  180,
+			OutputTokens: 150,
+		}, nil
+	}
+
 	// 学习计划 mock 输出
 	if contains(lastMsg, "生成学习计划") {
 		mockPlan := map[string]interface{}{

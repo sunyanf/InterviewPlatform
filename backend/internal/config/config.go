@@ -18,6 +18,7 @@ type Config struct {
 	Storage   StorageConfig
 	JWT       JWTConfig
 	LLM       LLMConfig
+	ASR       ASRConfig
 	Embedding EmbeddingConfig
 	Log       LogConfig
 }
@@ -78,6 +79,14 @@ type LLMConfig struct {
 	Model    string
 }
 
+type ASRConfig struct {
+	Provider string // openai / mock
+	APIKey   string
+	BaseURL  string
+	Model    string
+	Language string // 默认转写语言（zh / en），空为自动检测
+}
+
 type EmbeddingConfig struct {
 	Provider   string // openai / mock
 	APIKey     string
@@ -136,6 +145,13 @@ func Load() (*Config, error) {
 			APIKey:   getEnv("LLM_API_KEY", ""),
 			BaseURL:  getEnv("LLM_BASE_URL", "https://api.openai.com/v1"),
 			Model:    getEnv("LLM_MODEL", "gpt-4o-mini"),
+		},
+		ASR: ASRConfig{
+			Provider: getEnv("ASR_PROVIDER", "mock"),
+			APIKey:   getEnv("ASR_API_KEY", ""),
+			BaseURL:  getEnv("ASR_BASE_URL", "https://api.openai.com/v1"),
+			Model:    getEnv("ASR_MODEL", "whisper-1"),
+			Language: getEnv("ASR_LANGUAGE", "zh"),
 		},
 		Embedding: EmbeddingConfig{
 			Provider:   getEnv("EMBEDDING_PROVIDER", "mock"),

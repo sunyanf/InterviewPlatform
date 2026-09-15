@@ -213,6 +213,51 @@ GET  /api/v1/reports                       当前用户报告列表
 
 ---
 
+# 5.8 语音（Audio）
+
+需要鉴权。答案录音挂在题目上（一题一份，重传覆盖）；仅 `RUNNING` 状态会话可上传；转写与分析可重跑。
+
+```text
+POST /api/v1/answers/:questionID/audio             上传录音（multipart: file + duration_ms，≤10MB，wav/mp3/m4a/webm/ogg）
+POST /api/v1/answers/:questionID/audio/transcribe  ASR 转写
+POST /api/v1/answers/:questionID/audio/analyze     语音表达分析
+GET  /api/v1/answers/:questionID/audio             查询语音详情（含指标 + 15 分钟临时下载 URL）
+```
+
+错误语义：跨用户 403；会话非 RUNNING 上传 400 `SESSION_NOT_RUNNING`；格式不支持 400 `INVALID_FORMAT`；未上传 404 `AUDIO_NOT_FOUND`；未转写先分析 400 `NOT_TRANSCRIBED`；转写为空 400 `ASR_EMPTY_TRANSCRIPT`。
+
+语音量化指标由业务代码确定性计算（语速 = 有效字符/分钟，口头禅计数）；
+表达分析（`audio.speech_analyzer.v1`）只产定性建议，不计算分数；日志不输出音频与转写内容（AGENTS.md #17）。
+
+响应示例（GET）：
+
+```json
+{
+  "audio": {
+    "session_id": "...",
+    "question_id": "...",
+    "format": "wav",
+    "size_bytes": 102400,
+    "duration_ms": 61000,
+    "transcript": "…转写文本…",
+    "language": "zh",
+    "status": "analyzed",
+    "asr_provider": "mock",
+    "analysis": {"strengths": ["…"], "issues": ["…"], "suggestions": ["…"]}
+  },
+  "metrics": {
+    "chars_per_minute": 240.0,
+    "pace": "normal",
+    "filler_count": 5,
+    "filler_detail": {"嗯": 3, "那个": 2}
+  },
+  "download_url": "https://…presigned…",
+  "download_expire_seconds": 900
+}
+```
+
+---
+
 # 6. WebSocket
 
 ```text

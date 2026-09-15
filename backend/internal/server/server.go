@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ai-interview-platform/internal/agent"
+	"ai-interview-platform/internal/audio"
 	"ai-interview-platform/internal/config"
 	"ai-interview-platform/internal/evaluation"
 	"ai-interview-platform/internal/interview"
@@ -20,6 +21,7 @@ import (
 	"ai-interview-platform/internal/report"
 	"ai-interview-platform/internal/resume"
 	"ai-interview-platform/internal/user"
+	"ai-interview-platform/pkg/asr"
 	"ai-interview-platform/pkg/embedding"
 	"ai-interview-platform/pkg/jwt"
 	"ai-interview-platform/pkg/llm"
@@ -35,6 +37,7 @@ type Server struct {
 	storage   storage.Storage
 	llm       llm.Provider
 	embedder  embedding.Embedder
+	asr       asr.ASR
 	resumeSvc *resume.Service
 	agent     *agent.Agent
 	http      *http.Server
@@ -59,6 +62,15 @@ func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Man
 	}
 	s.embedder = embedder
 	log.Info("embedding provider initialized", "provider", embedder.Name(), "dimensions", embedder.Dimensions())
+
+	// 初始化 ASR Provider（语音转写）
+	asrProv, err := asr.NewASR(cfg.ASR)
+	if err != nil {
+		log.Error("init asr provider failed", "error", err)
+		panic(err)
+	}
+	s.asr = asrProv
+	log.Info("asr provider initialized", "provider", asrProv.Name())
 
 	// 共享的简历 Service（面试模块依赖）
 	resumeRepo := resume.NewRepository(db)
@@ -142,6 +154,12 @@ func (s *Server) routes() http.Handler {
 			r.Post("/reports/sessions/{sessionID}", s.reportHandler().Generate)
 			r.Get("/reports/sessions/{sessionID}", s.reportHandler().Get)
 			r.Get("/reports", s.reportHandler().List)
+
+			// 语音（答案录音）
+			r.Post("/answers/{questionID}/audio", s.audioHandler().Upload)
+			r.Post("/answers/{questionID}/audio/transcribe", s.audioHandler().Transcribe)
+			r.Post("/answers/{questionID}/audio/analyze", s.audioHandler().Analyze)
+			r.Get("/answers/{questionID}/audio", s.audioHandler().Get)
 		})
 	})
 
@@ -198,6 +216,14 @@ func (s *Server) reportHandler() *report.Handler {
 	interviewRepo := interview.NewRepository(s.db)
 	svc := report.NewService(report.NewRepository(s.db), evalRepo, interviewRepo, s.agent, s.log)
 	return report.NewHandler(svc)
+}
+
+// audioHandler 初始化语音 Handler
+func (s *Server) audioHandler() *audio.Handler {
+	interviewRepo := interview.NewRepository(s.db)
+	repo := audio.NewRepository(s.db)
+	svc := audio.NewService(repo, interviewRepo, s.storage, s.asr, s.agent, s.cfg.ASR.Language, s.log)
+	return audio.NewHandler(svc)
 }
 
 // knowledgeRetriever 将 knowledge.Service 适配为 interview.KnowledgeRetriever

@@ -48,6 +48,13 @@ const (
 	// 输出 Schema：{"strengths":[],"weaknesses":[],"focus_areas":[{"topic","reason","suggestions":[]}],"next_training":{"focus","suggested_question_types":[],"suggested_difficulty"}}
 	// 系统约束：只产建议内容，不计算任何分数；输入数据必须来自已验证的评估结果
 	PromptLearningPlanner = "report.learning_planner.v1"
+
+	// PromptSpeechAnalyzer 语音表达分析
+	// 用途：基于转写文本与语音指标（语速/口头禅）分析口头表达质量，给出改进建议
+	// 输入：问题、转写文本、语速评估、口头禅次数、音频时长
+	// 输出 Schema：{"strengths":[],"issues":[],"suggestions":[]}
+	// 系统约束：只产定性建议，不计算分数；日志不输出转写原文（AGENTS.md #17）
+	PromptSpeechAnalyzer = "audio.speech_analyzer.v1"
 )
 
 // buildSystemPrompt 构造带版本号的 system prompt

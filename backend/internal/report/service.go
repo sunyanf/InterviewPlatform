@@ -11,6 +11,7 @@ import (
 	"ai-interview-platform/internal/interview"
 	"ai-interview-platform/internal/task"
 	apperrors "ai-interview-platform/pkg/errors"
+	"ai-interview-platform/pkg/metrics"
 )
 
 // taskEnqueuer 任务入队能力（*task.Repository 实现；测试可替换）
@@ -159,6 +160,7 @@ func (s *Service) Generate(ctx context.Context, userID, sessionID string) (*Repo
 		HistorySummary:      historySummary(history),
 	})
 	if err != nil {
+		metrics.AgentFailures.Inc("learning_plan")
 		s.log.Error("agent learning plan failed", "session_id", sessionID, "error", err)
 		return nil, apperrors.Wrap("REPORT_FAILED", "生成学习计划失败，可稍后重试", 500, err)
 	}

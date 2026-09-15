@@ -79,10 +79,12 @@ type JWTConfig struct {
 }
 
 type LLMConfig struct {
-	Provider string // openai / mock
-	APIKey   string
-	BaseURL  string
-	Model    string
+	Provider         string // openai / mock
+	APIKey           string
+	BaseURL          string
+	Model            string
+	PriceInputPer1K  float64 // 输入 token 每 1K token 美元单价（0=不计费，仅用于 llm_cost_total 估算）
+	PriceOutputPer1K float64
 }
 
 type ASRConfig struct {
@@ -175,10 +177,12 @@ func Load() (*Config, error) {
 			Issuer:     getEnv("JWT_ISSUER", "ai-interview-platform"),
 		},
 		LLM: LLMConfig{
-			Provider: getEnv("LLM_PROVIDER", "mock"),
-			APIKey:   getEnv("LLM_API_KEY", ""),
-			BaseURL:  getEnv("LLM_BASE_URL", "https://api.openai.com/v1"),
-			Model:    getEnv("LLM_MODEL", "gpt-4o-mini"),
+			Provider:         getEnv("LLM_PROVIDER", "mock"),
+			APIKey:           getEnv("LLM_API_KEY", ""),
+			BaseURL:          getEnv("LLM_BASE_URL", "https://api.openai.com/v1"),
+			Model:            getEnv("LLM_MODEL", "gpt-4o-mini"),
+			PriceInputPer1K:  getEnvFloat("LLM_PRICE_INPUT_PER_1K", 0),
+			PriceOutputPer1K: getEnvFloat("LLM_PRICE_OUTPUT_PER_1K", 0),
 		},
 		ASR: ASRConfig{
 			Provider: getEnv("ASR_PROVIDER", "mock"),
@@ -254,6 +258,15 @@ func getEnv(key, defaultVal string) string {
 func getEnvInt(key string, defaultVal int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return defaultVal
+}
+
+func getEnvFloat(key string, defaultVal float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
 			return n
 		}
 	}

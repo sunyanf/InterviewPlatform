@@ -32,6 +32,7 @@ import (
 	"ai-interview-platform/pkg/embedding"
 	"ai-interview-platform/pkg/jwt"
 	"ai-interview-platform/pkg/llm"
+	"ai-interview-platform/pkg/metrics"
 	"ai-interview-platform/pkg/storage"
 	provider "ai-interview-platform/pkg/tts"
 )
@@ -60,6 +61,9 @@ type Server struct {
 
 // New 创建 Server
 func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Manager, st storage.Storage, llmProv llm.Provider) *Server {
+	// LLM 指标装饰：调用量/延迟/token/估算费用（不改变语义，透传流式能力）
+	llmProv = llm.NewMeteredProvider(llmProv, cfg.LLM.PriceInputPer1K, cfg.LLM.PriceOutputPer1K)
+
 	s := &Server{
 		cfg:     cfg,
 		db:      db,
@@ -166,12 +170,16 @@ func (s *Server) routes() http.Handler {
 	r.Use(appmiddleware.RequestID)
 	r.Use(appmiddleware.SecureHeaders)
 	r.Use(appmiddleware.Logger(s.log))
+	r.Use(appmiddleware.Metrics)
 	r.Use(middleware.Recoverer)
 
 	// 健康检查：healthz/livez 仅存活；readyz 校验依赖（PG/MinIO）
 	r.Get("/healthz", livezHandler)
 	r.Get("/livez", livezHandler)
 	r.Get("/readyz", s.readinessHandler)
+
+	// Prometheus 文本格式指标（无鉴权；生产由网络策略限制访问来源）
+	r.Method(http.MethodGet, "/metrics", metrics.Handler())
 
 	// API v1
 	r.Route("/api/v1", func(r chi.Router) {
@@ -355,7 +363,9 @@ type knowledgeRetriever struct {
 
 // RetrieveForQuery 检索知识片段
 func (a knowledgeRetriever) RetrieveForQuery(ctx context.Context, query string, topK int) ([]interview.KnowledgeSnippet, error) {
-	result, err := a.svc.Search(ctx, knowledge.SearchRequest{Query: query, TopK: topK})
+	result, err := a.svc.Search(ctx, knowledge.SearchRequest{
+		Query: query, TopK: topK, Caller: "interview_planning",
+	})
 	if err != nil {
 		return nil, err
 	}

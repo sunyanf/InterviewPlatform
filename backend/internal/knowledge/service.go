@@ -11,6 +11,7 @@ import (
 	apperrors "ai-interview-platform/pkg/errors"
 
 	"ai-interview-platform/pkg/embedding"
+	"ai-interview-platform/pkg/metrics"
 )
 
 // rrfK RRF 常数（标准取值 60）
@@ -170,6 +171,15 @@ func (s *Service) DeleteDocument(ctx context.Context, id string) error {
 
 // Search 混合检索：向量 + FTS + 关键词 → RRF 融合
 func (s *Service) Search(ctx context.Context, req SearchRequest) (*SearchResult, error) {
+	start := time.Now()
+	caller := req.Caller
+	if caller == "" {
+		caller = "api"
+	}
+	defer func() {
+		metrics.RAGDuration.Observe(time.Since(start).Seconds(), caller)
+	}()
+
 	query := strings.TrimSpace(req.Query)
 	if query == "" {
 		return nil, apperrors.New("INVALID_QUERY", "检索内容不能为空", 400)
@@ -215,10 +225,19 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (*SearchResult,
 		topK,
 	)
 
-	s.log.Info("hybrid search done", "query", query, "domain", req.Domain,
+	s.log.Info("hybrid search done", "query", query, "domain", req.Domain, "caller", caller,
 		"vector_hits", len(vectorHits), "fts_hits", len(ftsHits), "keyword_hits", len(kwHits), "fused", len(fused))
 
+	metrics.RAGQueries.Inc(caller, boolLabel(len(fused) > 0))
 	return &SearchResult{Query: query, Results: fused}, nil
+}
+
+// boolLabel 指标标签布尔值
+func boolLabel(hit bool) string {
+	if hit {
+		return "true"
+	}
+	return "false"
 }
 
 // FuseRRF RRF（Reciprocal Rank Fusion）融合多通道检索结果（纯函数，便于测试）

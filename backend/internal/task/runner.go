@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
+
+	"ai-interview-platform/pkg/metrics"
+	"ai-interview-platform/pkg/requestid"
 )
 
 // JobHandler 任务处理器：由业务模块注册，payload 为入队时的 JSON。
@@ -136,6 +141,7 @@ func (r *Runner) worker(ctx context.Context, idx int) {
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
 				r.log.Error("claim task failed", "worker", idx, "error", err)
+				metrics.TaskClaimWait.Inc(strconv.Itoa(idx))
 			}
 			if !sleep(ctx, r.cfg.PollInterval) {
 				return
@@ -156,28 +162,45 @@ func (r *Runner) worker(ctx context.Context, idx int) {
 // 任务 ctx 有意不继承 runner 的取消 ctx：优雅关闭时在途任务可继续执行到自己的租约上限，
 // ShutdownTimeout 仅决定主流程等待多久；未完成任务的锁会在租约超时后由 reaper 回收。
 func (r *Runner) execute(_ context.Context, t *Task) {
+	start := time.Now()
+	// 异步任务生成自己的 request_id（无 HTTP 请求），贯穿 handler 业务日志
+	reqID := fmt.Sprintf("task-%s-%d", t.ID, t.Attempts)
+	taskLog := r.log.With("request_id", reqID, "task_id", t.ID, "type", t.Type)
+
+	// result: success / retry（失败但还会重试）/ failed（重试耗尽）
+	result := "success"
+	defer func() {
+		metrics.TaskRuns.Inc(t.Type, result)
+		metrics.TaskDuration.Observe(time.Since(start).Seconds(), t.Type, result)
+	}()
+
 	h, ok := r.handlers[t.Type]
 	if !ok {
-		r.log.Error("unknown task type", "task_id", t.ID, "type", t.Type)
+		result = "failed"
+		taskLog.Error("unknown task type")
 		r.fail(t, ErrUnknownHandler.Error())
 		return
 	}
 
-	jobCtx, cancel := context.WithTimeout(context.Background(), r.cfg.LeaseTimeout)
+	jobCtx, cancel := context.WithTimeout(requestid.With(context.Background(), reqID), r.cfg.LeaseTimeout)
 	defer cancel()
 
 	if err := h(jobCtx, t.Payload); err != nil {
-		r.log.Error("task failed", "task_id", t.ID, "type", t.Type,
-			"attempts", t.Attempts, "error", err)
+		result = "retry"
+		if t.Attempts >= t.MaxAttempts {
+			result = "failed"
+		}
+		taskLog.Error("task failed", "attempts", t.Attempts, "result", result, "error", err)
 		r.fail(t, err.Error())
 		return
 	}
 
 	if err := r.repo.MarkSucceeded(context.Background(), t.ID); err != nil {
-		r.log.Error("mark task succeeded error", "task_id", t.ID, "error", err)
+		result = "retry" // 标记失败的任务会被 reaper 回收后重跑
+		taskLog.Error("mark task succeeded error, task will be retried after lease", "error", err)
 		return
 	}
-	r.log.Info("task succeeded", "task_id", t.ID, "type", t.Type, "attempts", t.Attempts)
+	taskLog.Info("task succeeded", "attempts", t.Attempts)
 }
 
 // fail 标记任务失败；重试耗尽进入 failed 终态时触发业务补偿钩子

@@ -12,6 +12,7 @@ import (
 	"ai-interview-platform/internal/job"
 	"ai-interview-platform/internal/resume"
 	apperrors "ai-interview-platform/pkg/errors"
+	"ai-interview-platform/pkg/metrics"
 )
 
 // AgentService Agent 模块对 Interview 模块暴露的能力接口
@@ -207,6 +208,7 @@ func (s *Service) Start(ctx context.Context, userID, sessionID string) (*Session
 		Knowledge:       knowledgeRefs,
 	})
 	if err != nil {
+		metrics.AgentFailures.Inc("plan_questions")
 		s.log.Error("plan questions failed", "session_id", sessionID, "error", err)
 		return nil, apperrors.Wrap("QUESTION_GENERATION_FAILED", "生成面试问题失败", 500, err)
 	}
@@ -237,6 +239,7 @@ func (s *Service) Start(ctx context.Context, userID, sessionID string) (*Session
 		FirstQuestion: planned[0].Question,
 	})
 	if err != nil {
+		metrics.AgentFailures.Inc("opening")
 		s.log.Warn("opening message failed", "session_id", sessionID, "error", err)
 	} else if err := s.repo.UpdateSessionMetadata(ctx, sess.ID, map[string]interface{}{
 		"opening_message": opening,
@@ -354,6 +357,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID, sessionID string, re
 		Difficulty:     q.Difficulty,
 	})
 	if err != nil {
+		metrics.AgentFailures.Inc("analyze_answer")
 		s.log.Warn("analyze answer failed", "session_id", sess.ID, "question_id", q.ID, "error", err)
 	} else if err := s.repo.UpdateAnswerAnalysis(ctx, answer.ID, analysis); err != nil {
 		s.log.Warn("update answer analysis failed", "answer_id", answer.ID, "error", err)
@@ -370,6 +374,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID, sessionID string, re
 			Analysis:       analysis,
 		})
 		if err != nil {
+			metrics.AgentFailures.Inc("decide_followup")
 			s.log.Warn("decide follow-up failed", "session_id", sess.ID, "error", err)
 		} else if decision.ShouldFollowUp {
 			// 业务代码决定创建追问问题
@@ -424,6 +429,7 @@ func (s *Service) Finish(ctx context.Context, userID, sessionID string) (*Sessio
 
 	sess.Status = StatusCompleted
 	sess.EndedAt = &now
+	metrics.InterviewsCompleted.Inc()
 	return sess, nil
 }
 

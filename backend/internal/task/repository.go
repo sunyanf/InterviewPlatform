@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"ai-interview-platform/pkg/metrics"
 )
 
 // Repository 异步任务数据访问层
@@ -80,6 +82,7 @@ func (r *Repository) Enqueue(ctx context.Context, req EnqueueRequest) (*Task, bo
 	)
 	created, err := scanTask(row)
 	if err == nil {
+		metrics.TasksEnqueued.Inc(t.Type)
 		return created, true, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {

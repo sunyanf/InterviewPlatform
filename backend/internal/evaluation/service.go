@@ -7,6 +7,8 @@ import (
 	"log/slog"
 
 	apperrors "ai-interview-platform/pkg/errors"
+	"ai-interview-platform/pkg/metrics"
+	"ai-interview-platform/pkg/requestid"
 
 	"ai-interview-platform/internal/agent"
 	"ai-interview-platform/internal/interview"
@@ -135,7 +137,9 @@ func (s *Service) Evaluate(ctx context.Context, userID, sessionID string) (*Eval
 		QA:            qa,
 	})
 	if err != nil {
-		s.log.Error("agent evaluate failed", "session_id", sessionID, "error", err)
+		metrics.AgentFailures.Inc("evaluate")
+		s.log.Error("agent evaluate failed", "session_id", sessionID,
+			"request_id", requestid.From(ctx), "error", err)
 		return nil, apperrors.Wrap("EVALUATION_FAILED", "生成评估失败，可稍后重试", 500, err)
 	}
 
@@ -163,7 +167,7 @@ func (s *Service) Evaluate(ctx context.Context, userID, sessionID string) (*Eval
 	}
 
 	s.log.Info("evaluation created", "session_id", sessionID, "total_score", total,
-		"prompt_version", output.PromptVersion, "model", output.Model)
+		"request_id", requestid.From(ctx), "prompt_version", output.PromptVersion, "model", output.Model)
 	return evaluation, nil
 }
 

@@ -47,6 +47,8 @@ type SearchRequest struct {
 	Query  string `json:"query"`
 	Domain string `json:"domain"` // 可选，按 metadata->>'domain' 过滤
 	TopK   int    `json:"top_k"`
+	// Caller 调用方标识（仅内部用于指标标签，不参与 JSON 协议）
+	Caller string `json:"-"`
 }
 
 // RetrievedChunk 检索召回结果（保留 source/metadata，见 docs/RAG.md #6）

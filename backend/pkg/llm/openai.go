@@ -20,8 +20,9 @@ type OpenAIConfig struct {
 // OpenAIProvider OpenAI 兼容 Provider 实现
 // 适用于 OpenAI、通义千问、DeepSeek 等兼容 OpenAI API 的服务
 type OpenAIProvider struct {
-	cfg    OpenAIConfig
-	client *http.Client
+	cfg          OpenAIConfig
+	client       *http.Client
+	streamClient *http.Client // 流式请求不设整体超时，生命周期完全由 ctx 控制
 }
 
 // 重试策略：仅对网络错误与 429/5xx 重试（瞬时故障），指数退避
@@ -37,6 +38,7 @@ func NewOpenAIProvider(cfg OpenAIConfig) *OpenAIProvider {
 		client: &http.Client{
 			Timeout: 60 * time.Second,
 		},
+		streamClient: &http.Client{},
 	}
 }
 
@@ -51,6 +53,7 @@ type openAIRequest struct {
 	Messages    []Message `json:"messages"`
 	Temperature float64   `json:"temperature,omitempty"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Stream      bool      `json:"stream,omitempty"`
 }
 
 // openAIResponse OpenAI API 响应

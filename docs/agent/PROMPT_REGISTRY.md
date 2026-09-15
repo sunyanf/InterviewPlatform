@@ -22,6 +22,7 @@ interview.answer_analyzer.v1
 interview.evaluator.v1（Week6：整场维度评估，只产维度分/证据/建议，总分由业务代码计算）
 report.learning_planner.v1（Week7：基于评估结果归纳优点/不足、生成学习计划与下次训练建议，不计算任何分数）
 audio.speech_analyzer.v1（Week8：基于转写文本与语音指标分析口头表达，只产定性建议，不算分）
+realtime.interviewer.v1（Week9：WebSocket 实时面试官流式对话，自然语言增量输出，不改状态不持久化）
 evaluation.evaluator.v1
 learning.coach.v1
 ```

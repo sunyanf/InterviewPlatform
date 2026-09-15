@@ -258,40 +258,82 @@ GET  /api/v1/answers/:questionID/audio             查询语音详情（含指�
 
 ---
 
-# 6. WebSocket
+# 6. WebSocket 实时面试
 
 ```text
-/ws/v1/interviews/{session_id}
+GET /api/v1/interviews/{id}/ws?token={JWT}
 ```
 
-消息：
+浏览器 WebSocket API 无法设置 `Authorization` 头，JWT 通过 query 参数 `token` 传递。
+鉴权失败 / 会话不存在 / 跨用户访问在协议升级前以普通 HTTP 状态码返回（401 / 404 / 403）。
+同一会话只允许一个活跃连接：新连接顶替旧连接（旧连接收到 close frame，code=4000）。
+所有帧均为 JSON 文本，统一信封：
+
+```json
+{ "type": "消息类型", "data": { } }
+```
+
+## 6.1 连接与重连
+
+连接建立后服务端立即推送 `snapshot`（会话全量状态，结构同 `GET /interviews/{id}`）。
+断线重连后重新连接即可再次收到快照，客户端据此全量恢复，无需维护事件游标。
+
+心跳：客户端可发送 `{"type":"ping"}`，服务端回复 `{"type":"pong"}`；
+此外服务端每 50 秒发送 WebSocket 协议层 Ping，60 秒无响应判定死连接。
+
+## 6.2 客户端 → 服务端
+
+### 提交结构化回答（与 REST 提交回答等价，结果分阶段推送）
 
 ```json
 {
-  "type": "user_message",
-  "content": "..."
+  "type": "answer",
+  "data": { "question_id": "...", "text_content": "...", "duration_ms": 3000 }
 }
 ```
 
-服务端消息：
+### 实时面试官对话（token 流式回复；仅 RUNNING 会话，单条 ≤ 2000 字符）
 
 ```json
 {
-  "type": "interviewer_message",
-  "content": "..."
+  "type": "chat",
+  "data": {
+    "message": "能给点提示吗？",
+    "history": [
+      { "role": "user", "content": "上一轮发言" },
+      { "role": "assistant", "content": "上一轮面试官回复" }
+    ]
+  }
 }
 ```
 
-状态：
+`history` 为可选的本连接内对话历史（最多保留 20 条，服务端只接受 user/assistant 角色）。
+实时对话不改变任何会话状态、不持久化、不进入评估。
+
+### 心跳
 
 ```json
-{
-  "type": "state",
-  "status": "RUNNING",
-  "question_no": 4,
-  "remaining_seconds": 1020
-}
+{ "type": "ping" }
 ```
+
+## 6.3 服务端 → 客户端
+
+| type | data | 时机 |
+|---|---|---|
+| `snapshot` | Session 全量状态 | 连接 / 重连 |
+| `answer_saved` | Answer | answer 处理：回答已落库 |
+| `analysis` | AnswerAnalysis | answer 处理：AI 分析完成（可为空不推） |
+| `follow_up` | Question | answer 处理：产生追问问题（可为空不推） |
+| `chat_delta` | `{"delta":"..."}` | 实时对话 token 增量 |
+| `chat_done` | `{}` | 实时对话流结束 |
+| `pong` | `{}` | 响应客户端 ping |
+| `error` | `{"code":"...","message":"..."}` | 业务错误（连接保持，可继续） |
+
+`error` 常见 code：`BAD_REQUEST`、`EMPTY_MESSAGE`、`MESSAGE_TOO_LONG`、
+`SESSION_NOT_RUNNING`、`ALREADY_ANSWERED`、`INVALID_STATE_TRANSITION`、
+`LLM_STREAM_ERROR`、`UNKNOWN_MESSAGE_TYPE`。
+
+close code：`4000` 被新连接顶替；`4001` 服务端主动关闭（如发送缓冲溢出）。
 
 ---
 

@@ -21,6 +21,13 @@ const (
 	// 系统约束：只产出对话内容，不改变会话状态
 	PromptInterviewer = "interview.interviewer.v1"
 
+	// PromptRealtimeInterviewer 实时面试官对话
+	// 用途：WebSocket 实时面试通道中的即时对话与追问（token 流式输出）
+	// 输入：岗位标题、面试类型、连接内对话历史、本轮候选人发言
+	// 输出：自然语言文本增量（非 JSON），150 字以内
+	// 系统约束：只产出对话内容，不改变任何会话状态、不持久化（AGENTS.md #10）
+	PromptRealtimeInterviewer = "realtime.interviewer.v1"
+
 	// PromptFollowUp 追问决策
 	// 用途：根据问题、参考要点、回答内容判断是否追问
 	// 输入：问题、expected_points、回答文本、回答分析结果

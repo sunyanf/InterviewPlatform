@@ -18,6 +18,7 @@ import (
 	"ai-interview-platform/internal/job"
 	"ai-interview-platform/internal/knowledge"
 	appmiddleware "ai-interview-platform/internal/middleware"
+	"ai-interview-platform/internal/realtime"
 	"ai-interview-platform/internal/report"
 	"ai-interview-platform/internal/resume"
 	"ai-interview-platform/internal/user"
@@ -114,6 +115,10 @@ func (s *Server) routes() http.Handler {
 		r.Get("/jobs/categories", s.jobHandler().ListCategories)
 		r.Get("/jobs", s.jobHandler().ListJobs)
 		r.Get("/jobs/{id}", s.jobHandler().GetJob)
+
+		// WebSocket 实时面试：浏览器 WS 无法设置 Authorization 头，
+		// 由 handler 自行校验 query token，故不放在 Auth 中间件组内
+		r.Get("/interviews/{id}/ws", s.realtimeHandler().HandleWS)
 
 		// 需要鉴权的路由
 		r.Group(func(r chi.Router) {
@@ -224,6 +229,16 @@ func (s *Server) audioHandler() *audio.Handler {
 	repo := audio.NewRepository(s.db)
 	svc := audio.NewService(repo, interviewRepo, s.storage, s.asr, s.agent, s.cfg.ASR.Language, s.log)
 	return audio.NewHandler(svc)
+}
+
+// realtimeHandler 初始化 WebSocket 实时面试 Handler
+func (s *Server) realtimeHandler() *realtime.Handler {
+	repo := interview.NewRepository(s.db)
+	jobRepo := job.NewRepository(s.db)
+	knowledgeRepo := knowledge.NewRepository(s.db)
+	knowledgeSvc := knowledge.NewService(knowledgeRepo, s.embedder, s.log)
+	svc := interview.NewService(repo, jobRepo, s.resumeSvc, s.agent, knowledgeRetriever{knowledgeSvc}, s.log)
+	return realtime.NewHandler(s.jwtMgr, svc, s.agent, s.log)
 }
 
 // knowledgeRetriever 将 knowledge.Service 适配为 interview.KnowledgeRetriever

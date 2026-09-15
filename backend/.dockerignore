@@ -1,0 +1,18 @@
+# 构建产物与本地环境
+bin/
+*.exe
+.env
+.env.*
+
+# 测试与开发文件
+*_test.go
+testdata/
+
+# 版本控制与 IDE
+.git/
+.vscode/
+.idea/
+
+# 文档（运行镜像不需要）
+*.md
+docs/

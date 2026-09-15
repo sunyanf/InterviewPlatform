@@ -39,24 +39,25 @@ import (
 
 // Server HTTP 服务器
 type Server struct {
-	cfg       *config.Config
-	db        *pgxpool.Pool
-	log       *slog.Logger
-	jwtMgr    *jwt.Manager
-	storage   storage.Storage
-	llm       llm.Provider
-	embedder  embedding.Embedder
-	asr       asr.ASR
-	ttsProv   provider.TTS
-	resumeSvc *resume.Service
-	evalSvc   *evaluation.Service
-	reportSvc *report.Service
-	taskRepo  *task.Repository
-	runner    *task.Runner
-	authLimit *appmiddleware.Limiter
-	apiLimit  *appmiddleware.Limiter
-	agent     *agent.Agent
-	http      *http.Server
+	cfg          *config.Config
+	db           *pgxpool.Pool
+	log          *slog.Logger
+	jwtMgr       *jwt.Manager
+	storage      storage.Storage
+	llm          llm.Provider
+	embedder     embedding.Embedder
+	asr          asr.ASR
+	ttsProv      provider.TTS
+	resumeSvc    *resume.Service
+	evalSvc      *evaluation.Service
+	reportSvc    *report.Service
+	taskRepo     *task.Repository
+	runner       *task.Runner
+	authLimit    *appmiddleware.Limiter
+	apiLimit     *appmiddleware.Limiter
+	agent        *agent.Agent
+	knowledgeSvc *knowledge.Service
+	http         *http.Server
 }
 
 // New 创建 Server
@@ -104,6 +105,10 @@ func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Man
 	// 共享的任务仓储与业务 Service（HTTP handler 与 worker 共用同一组实例）
 	s.taskRepo = task.NewRepository(db)
 
+	// 共享的知识库 Service（出题/评估 RAG 检索与知识管理 handler 共用）
+	knowledgeRepo := knowledge.NewRepository(db)
+	s.knowledgeSvc = knowledge.NewService(knowledgeRepo, embedder, log)
+
 	// 共享的简历 Service（面试模块依赖）
 	resumeRepo := resume.NewRepository(db)
 	jobRepo := job.NewRepository(db)
@@ -115,7 +120,8 @@ func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Man
 	// 评估/报告 Service 单例（HTTP 入队与 worker 执行共用）
 	interviewRepo := interview.NewRepository(db)
 	evalRepo := evaluation.NewRepository(db)
-	s.evalSvc = evaluation.NewService(evalRepo, interviewRepo, s.agent, s.taskRepo, log)
+	s.evalSvc = evaluation.NewService(evalRepo, interviewRepo, s.agent,
+		evaluationKnowledge{s.knowledgeSvc}, s.taskRepo, log)
 	s.reportSvc = report.NewService(
 		report.NewRepository(db), evalRepo, interviewRepo, s.agent, s.taskRepo, log)
 
@@ -299,17 +305,13 @@ func (s *Server) resumeHandler() *resume.Handler {
 func (s *Server) interviewHandler() *interview.Handler {
 	repo := interview.NewRepository(s.db)
 	jobRepo := job.NewRepository(s.db)
-	knowledgeRepo := knowledge.NewRepository(s.db)
-	knowledgeSvc := knowledge.NewService(knowledgeRepo, s.embedder, s.log)
-	svc := interview.NewService(repo, jobRepo, s.resumeSvc, s.agent, knowledgeRetriever{knowledgeSvc}, s.log)
+	svc := interview.NewService(repo, jobRepo, s.resumeSvc, s.agent, knowledgeRetriever{s.knowledgeSvc}, s.log)
 	return interview.NewHandler(svc)
 }
 
 // knowledgeHandler 初始化知识库 Handler
 func (s *Server) knowledgeHandler() *knowledge.Handler {
-	repo := knowledge.NewRepository(s.db)
-	svc := knowledge.NewService(repo, s.embedder, s.log)
-	return knowledge.NewHandler(svc)
+	return knowledge.NewHandler(s.knowledgeSvc)
 }
 
 // evaluationHandler 初始化评估 Handler
@@ -350,9 +352,7 @@ func (s *Server) ttsHandler() *ttssvc.Handler {
 func (s *Server) newInterviewService() *interview.Service {
 	repo := interview.NewRepository(s.db)
 	jobRepo := job.NewRepository(s.db)
-	knowledgeRepo := knowledge.NewRepository(s.db)
-	knowledgeSvc := knowledge.NewService(knowledgeRepo, s.embedder, s.log)
-	return interview.NewService(repo, jobRepo, s.resumeSvc, s.agent, knowledgeRetriever{knowledgeSvc}, s.log)
+	return interview.NewService(repo, jobRepo, s.resumeSvc, s.agent, knowledgeRetriever{s.knowledgeSvc}, s.log)
 }
 
 // knowledgeRetriever 将 knowledge.Service 适配为 interview.KnowledgeRetriever
@@ -361,7 +361,7 @@ type knowledgeRetriever struct {
 	svc *knowledge.Service
 }
 
-// RetrieveForQuery 检索知识片段
+// RetrieveForQuery 检索知识片段（出题链路）
 func (a knowledgeRetriever) RetrieveForQuery(ctx context.Context, query string, topK int) ([]interview.KnowledgeSnippet, error) {
 	result, err := a.svc.Search(ctx, knowledge.SearchRequest{
 		Query: query, TopK: topK, Caller: "interview_planning",
@@ -373,6 +373,31 @@ func (a knowledgeRetriever) RetrieveForQuery(ctx context.Context, query string, 
 	for _, rc := range result.Results {
 		source, _ := rc.Metadata["source"].(string)
 		snippets = append(snippets, interview.KnowledgeSnippet{
+			Content: rc.Content,
+			Source:  source,
+		})
+	}
+	return snippets, nil
+}
+
+// evaluationKnowledge 将 knowledge.Service 适配为 evaluation 的 RAG 检索能力
+type evaluationKnowledge struct {
+	svc *knowledge.Service
+}
+
+// RetrieveForEvaluation 检索知识片段（评估链路，保留 ChunkID/Source 供 evidence.reference）
+func (a evaluationKnowledge) RetrieveForEvaluation(ctx context.Context, query string, topK int) ([]evaluation.KnowledgeSnippet, error) {
+	result, err := a.svc.Search(ctx, knowledge.SearchRequest{
+		Query: query, TopK: topK, Caller: "session_evaluation",
+	})
+	if err != nil {
+		return nil, err
+	}
+	snippets := make([]evaluation.KnowledgeSnippet, 0, len(result.Results))
+	for _, rc := range result.Results {
+		source, _ := rc.Metadata["source"].(string)
+		snippets = append(snippets, evaluation.KnowledgeSnippet{
+			ChunkID: rc.ChunkID,
 			Content: rc.Content,
 			Source:  source,
 		})

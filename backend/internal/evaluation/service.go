@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	apperrors "ai-interview-platform/pkg/errors"
 	"ai-interview-platform/pkg/metrics"
@@ -20,21 +21,36 @@ type taskEnqueuer interface {
 	Enqueue(ctx context.Context, req task.EnqueueRequest) (*task.Task, bool, error)
 }
 
+// KnowledgeSnippet 评估链路使用的知识片段（保留 ChunkID/Source 用于 evidence.reference）
+type KnowledgeSnippet struct {
+	ChunkID string
+	Content string
+	Source  string
+}
+
+// knowledgeProvider 评估时的 RAG 检索能力（可为 nil：空库或未接入时退化为无参考评估）
+type knowledgeProvider interface {
+	RetrieveForEvaluation(ctx context.Context, query string, topK int) ([]KnowledgeSnippet, error)
+}
+
 // Service 评估业务逻辑层
 type Service struct {
 	repo          *Repository
 	interviewRepo *interview.Repository
 	agent         *agent.Agent
+	knowledge     knowledgeProvider
 	tasks         taskEnqueuer
 	log           *slog.Logger
 }
 
 // NewService 创建评估 Service
-func NewService(repo *Repository, interviewRepo *interview.Repository, agentSvc *agent.Agent, tasks taskEnqueuer, log *slog.Logger) *Service {
+func NewService(repo *Repository, interviewRepo *interview.Repository, agentSvc *agent.Agent,
+	knowledgeSvc knowledgeProvider, tasks taskEnqueuer, log *slog.Logger) *Service {
 	return &Service{
 		repo:          repo,
 		interviewRepo: interviewRepo,
 		agent:         agentSvc,
+		knowledge:     knowledgeSvc,
 		tasks:         tasks,
 		log:           log,
 	}
@@ -130,11 +146,31 @@ func (s *Service) Evaluate(ctx context.Context, userID, sessionID string) (*Eval
 		return nil, apperrors.New("NO_ANSWER_TO_EVALUATE", "该面试没有可评估的回答", 409)
 	}
 
+	// RAG 检索：用岗位与全部问题作为查询召回参考资料。
+	// 检索失败不阻断评估（退化为无参考评估），但空库/失败必须可观测（日志 + 调用方指标）。
+	var knowledgeRefs []string
+	if s.knowledge != nil {
+		snippets, err := s.knowledge.RetrieveForEvaluation(ctx, buildRetrievalQuery(sess.JobTitle, qa), 5)
+		if err != nil {
+			s.log.Warn("retrieve knowledge for evaluation failed, proceeding without references",
+				"session_id", sessionID, "request_id", requestid.From(ctx), "error", err)
+		} else {
+			for _, sn := range snippets {
+				if sn.Content != "" {
+					knowledgeRefs = append(knowledgeRefs, sn.Content)
+				}
+			}
+			s.log.Info("knowledge retrieved for evaluation", "session_id", sessionID,
+				"request_id", requestid.From(ctx), "snippets", len(knowledgeRefs))
+		}
+	}
+
 	// Agent 评估：产出维度分/证据/建议（失败可重跑，LLM 不算总分）
 	output, err := s.agent.Evaluate(ctx, agent.EvaluateInput{
 		JobTitle:      sess.JobTitle,
 		InterviewType: sess.InterviewType,
 		QA:            qa,
+		Knowledge:     knowledgeRefs,
 	})
 	if err != nil {
 		metrics.AgentFailures.Inc("evaluate")
@@ -209,4 +245,20 @@ func (s *Service) List(ctx context.Context, userID string) ([]Evaluation, error)
 		return nil, apperrors.Wrap("INTERNAL_ERROR", "查询评估列表失败", 500, err)
 	}
 	return list, nil
+}
+
+// buildRetrievalQuery 拼接评估检索查询：岗位名 + 全部问题原文（截断防止超长）
+func buildRetrievalQuery(jobTitle string, qa []agent.EvaluatedQA) string {
+	var b strings.Builder
+	b.WriteString(jobTitle)
+	for _, item := range qa {
+		b.WriteByte(' ')
+		b.WriteString(item.Question)
+	}
+	q := strings.TrimSpace(b.String())
+	const maxRunes = 1000
+	if runes := []rune(q); len(runes) > maxRunes {
+		q = string(runes[:maxRunes])
+	}
+	return q
 }

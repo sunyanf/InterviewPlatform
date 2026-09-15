@@ -142,3 +142,41 @@ PostgreSQL Full Text Search
 ```
 
 后续数据规模明显增长再考虑独立向量数据库。
+
+---
+
+# 10. MVP 实现现状
+
+## 10.1 知识导入
+
+`backend/cmd/ingest` 将本地 `.md/.txt` 文件批量导入（每个文件一个文档）：
+
+```bash
+go run ./cmd/ingest \
+  -dir ./seed/knowledge \
+  -source "2026 公务员题库" \
+  -source-type interview_bank \
+  -source-url https://example.com/bank \
+  -effective-from 2026-01-01T00:00:00Z \
+  -domain civil_service -topic 综合分析
+```
+
+- `-source` 必填：禁止导入来源不明的知识（AGENTS.md #14）；
+- `-source-type`：manual / official / interview_bank / docs；
+- 政策/题库类内容必须提供 `-effective-from`，过期内容通过 `-effective-to` 标注（#16）；
+- markdown 标题（首个 `# `）作为文档标题，否则用文件名；
+- 导入走与 API 相同的 `knowledge.Service.CreateDocument`（分块 + embedding + 溯源元数据）。
+
+## 10.2 检索调用方
+
+| caller | 触发点 | 用途 |
+| --- | --- | --- |
+| `interview_planning` | 面试开始出题 | 基于岗位/简历知识生成问题 |
+| `session_evaluation` | worker 执行评估 | 岗位名 + 全部问题作为 query，topK=5，注入评估 prompt 的参考知识 |
+| `api` | `POST /api/v1/knowledge/search` | 管理/调试检索 |
+
+## 10.3 失败与空结果策略
+
+- 检索失败：记录 warn 日志后**退化为无参考评估**，不阻断面试/评估主链路；
+- 空结果：不传参考知识，模型不得伪造来源（评估 evidence 仍需基于用户回答）；
+- 每次检索计入 `rag_queries_total{caller,hit}`，延迟计入 `rag_retrieval_duration_seconds`。

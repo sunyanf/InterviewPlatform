@@ -1,0 +1,136 @@
+# 生产形态全栈（单机 MVP）：postgres / minio / migrate(一次性) / backend(API+worker) / frontend
+#
+# 使用：
+#   cp .env.production.example .env.production   # 填好密钥后
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# 多副本扩容：复制 backend 服务为 api 节点并设 TASK_ENABLED=false（纯 API），
+# 整个部署至少保留一个 TASK_ENABLED=true 的 worker 实例。
+
+x-backend-env: &backend-env
+  APP_ENV: prod
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  SERVER_PORT: "8080"
+  ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?set ALLOWED_ORIGINS, e.g. https://interview.example.com}
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_USER: ${DB_USER:-postgres}
+  DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in env file}
+  DB_NAME: ${DB_NAME:-ai_interview}
+  DB_SSLMODE: disable
+  STORAGE_ENDPOINT: minio:9000
+  STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:?set STORAGE_ACCESS_KEY}
+  STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:?set STORAGE_SECRET_KEY}
+  STORAGE_BUCKET: ${STORAGE_BUCKET:-ai-interview}
+  STORAGE_USE_SSL: "false"
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET (>=32 random chars)}
+  JWT_EXPIRE_TIME: ${JWT_EXPIRE_TIME:-2h}
+  REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-720h}
+  TASK_ENABLED: ${TASK_ENABLED:-true}
+  TASK_WORKERS: ${TASK_WORKERS:-2}
+  RATE_LIMIT_ENABLED: "true"
+  # LLM / ASR / TTS / Embedding（mock 留空即可联调；上线填真实 Provider）
+  LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+  LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+  ASR_PROVIDER: ${ASR_PROVIDER:-mock}
+  ASR_API_KEY: ${ASR_API_KEY:-}
+  TTS_PROVIDER: ${TTS_PROVIDER:-mock}
+  TTS_API_KEY: ${TTS_API_KEY:-}
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-mock}
+  EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-ai_interview}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-ai_interview}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  minio:
+    image: quay.io/minio/minio:latest
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY}
+    command: server /data --console-address ":9001"
+    ports:
+      # 控制台仅绑定本机，调试用；正式环境建议经反代加鉴权或移除
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    build:
+      context: ./backend
+    image: ai-interview-backend:latest
+    command: ["/app/migrate", "up"]
+    environment:
+      <<: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build:
+      context: ./backend
+    image: ai-interview-backend:latest
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+    ports:
+      # 仅绑定本机：供指标抓取/调试，公网由前端 nginx 或外层网关接入
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+    image: ai-interview-frontend:latest
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_started
+
+  # 可选：--profile monitoring 启动；抓取 backend:8080/metrics
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    volumes:
+      - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  minio-data:
+  prometheus-data:

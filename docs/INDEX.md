@@ -43,6 +43,7 @@ evaluation/EVAL_SPEC.md
 ```text
 SECURITY.md
 OBSERVABILITY.md
+DEPLOYMENT.md
 operations/LOCAL_SETUP.md
 operations/RELEASE.md
 security/PROMPT_INJECTION.md

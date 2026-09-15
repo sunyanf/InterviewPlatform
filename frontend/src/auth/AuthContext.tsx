@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { authApi } from '../api/endpoints'
-import { tokenStore } from '../api/client'
+import { saveTokens, tokenStore } from '../api/client'
 import type { User } from '../api/types'
 
 interface AuthState {
@@ -9,7 +9,7 @@ interface AuthState {
   loading: boolean
   login: (email: string, password: string) => Promise<void>
   register: (email: string, password: string, nickname: string) => Promise<void>
-  logout: () => void
+  logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthState | null>(null)
@@ -18,7 +18,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // 启动时若有 token，拉取 /me 恢复会话
+  // 启动时若有令牌，拉取 /me 恢复会话（access 过期时 client 会自动用 refresh 旋转重试）
   useEffect(() => {
     const token = tokenStore.get()
     if (!token) {
@@ -34,17 +34,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await authApi.login(email, password)
-    tokenStore.set(res.token)
+    saveTokens(res)
     setUser(res.user)
   }, [])
 
   const register = useCallback(async (email: string, password: string, nickname: string) => {
     const res = await authApi.register({ email, password, nickname })
-    tokenStore.set(res.token)
+    saveTokens(res)
     setUser(res.user)
   }, [])
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    // 通知后端吊销 refresh token（网络失败也本地登出，忽略错误）
+    const refreshToken = tokenStore.getRefresh()
+    if (refreshToken) {
+      try {
+        await authApi.logout(refreshToken)
+      } catch {
+        // best effort
+      }
+    }
     tokenStore.clear()
     setUser(null)
   }, [])

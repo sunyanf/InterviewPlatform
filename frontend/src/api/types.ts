@@ -19,7 +19,13 @@ export interface User {
 
 export interface LoginResponse {
   token: string
+  refresh_token: string
+  expires_in: number
   user: User
+}
+
+export interface RefreshRequest {
+  refresh_token: string
 }
 
 export interface RegisterRequest {

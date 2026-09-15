@@ -100,7 +100,7 @@ func newTestServer(svc InterviewService, ag ChatAgent) (*httptest.Server, *jwt.M
 
 func newTestServerWithSpeech(svc InterviewService, ag ChatAgent, sp SpeechSynthesizer) (*httptest.Server, *jwt.Manager) {
 	mgr := testJWTManager()
-	h := NewHandler(mgr, svc, ag, sp, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := NewHandler(mgr, svc, ag, sp, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	r := chi.NewRouter()
 	r.Get("/api/v1/interviews/{id}/ws", h.HandleWS)
 	return httptest.NewServer(r), mgr
@@ -162,6 +162,40 @@ func runningSession() *interview.Session {
 }
 
 // ---------- tests ----------
+
+// TestWS_OriginWhitelist 白名单对 WebSocket 升级生效
+func TestWS_OriginWhitelist(t *testing.T) {
+	mgr := testJWTManager()
+	h := NewHandler(mgr, &fakeService{sess: runningSession()}, &fakeAgent{}, nil,
+		[]string{"https://app.example.com"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r := chi.NewRouter()
+	r.Get("/api/v1/interviews/{id}/ws", h.HandleWS)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	token, _ := mgr.Generate("u1", "a@b.com")
+	url := wsURL(srv, "s1", token)
+
+	// 命中白名单：升级成功
+	allowed := http.Header{}
+	allowed.Set("Origin", "https://app.example.com")
+	conn, _, err := websocket.DefaultDialer.Dial(url, allowed)
+	if err != nil {
+		t.Fatalf("whitelisted origin should upgrade: %v", err)
+	}
+	conn.Close()
+
+	// 非白名单：服务端 403，握手失败
+	blocked := http.Header{}
+	blocked.Set("Origin", "https://evil.example.com")
+	_, resp, err := websocket.DefaultDialer.Dial(url, blocked)
+	if err == nil {
+		t.Fatal("cross-origin dial must fail")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for non-whitelisted origin, got %+v", resp)
+	}
+}
 
 func TestWS_MissingToken(t *testing.T) {
 	srv, _ := newTestServer(&fakeService{sess: runningSession()}, &fakeAgent{})

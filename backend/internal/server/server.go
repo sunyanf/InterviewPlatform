@@ -115,8 +115,10 @@ func (s *Server) routes() http.Handler {
 	r.Use(appmiddleware.Logger(s.log))
 	r.Use(middleware.Recoverer)
 
-	// 健康检查
-	r.Get("/healthz", healthHandler)
+	// 健康检查：healthz/livez 仅存活；readyz 校验依赖（PG/MinIO）
+	r.Get("/healthz", livezHandler)
+	r.Get("/livez", livezHandler)
+	r.Get("/readyz", s.readinessHandler)
 
 	// API v1
 	r.Route("/api/v1", func(r chi.Router) {
@@ -253,7 +255,7 @@ func (s *Server) realtimeHandler() *realtime.Handler {
 	svc := s.newInterviewService()
 	speech := ttssvc.NewService(svc, s.ttsProv, s.storage,
 		s.cfg.TTS.Model, s.cfg.TTS.Voice, s.cfg.TTS.Format, s.log)
-	return realtime.NewHandler(s.jwtMgr, svc, s.agent, speech, s.log)
+	return realtime.NewHandler(s.jwtMgr, svc, s.agent, speech, s.cfg.Server.AllowedOrigins, s.log)
 }
 
 // ttsHandler 初始化面试官语音（TTS）Handler
@@ -307,11 +309,4 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return s.http.Shutdown(shutdownCtx)
-}
-
-// healthHandler 健康检查
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }

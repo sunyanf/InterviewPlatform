@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -30,9 +31,10 @@ type AppConfig struct {
 }
 
 type ServerConfig struct {
-	Port         string
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
+	Port           string
+	ReadTimeout    time.Duration
+	WriteTimeout   time.Duration
+	AllowedOrigins []string // WebSocket 跨域白名单（ALLOWED_ORIGINS，逗号分隔）；空=放行（仅限开发）
 }
 
 type DatabaseConfig struct {
@@ -120,9 +122,10 @@ func Load() (*Config, error) {
 			Env:  getEnv("APP_ENV", "dev"),
 		},
 		Server: ServerConfig{
-			Port:         getEnv("SERVER_PORT", "8080"),
-			ReadTimeout:  getEnvDuration("SERVER_READ_TIMEOUT", 15*time.Second),
-			WriteTimeout: getEnvDuration("SERVER_WRITE_TIMEOUT", 15*time.Second),
+			Port:           getEnv("SERVER_PORT", "8080"),
+			ReadTimeout:    getEnvDuration("SERVER_READ_TIMEOUT", 15*time.Second),
+			WriteTimeout:   getEnvDuration("SERVER_WRITE_TIMEOUT", 15*time.Second),
+			AllowedOrigins: getEnvList("ALLOWED_ORIGINS"),
 		},
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
@@ -193,8 +196,13 @@ func Load() (*Config, error) {
 
 // Validate 校验关键配置
 func (c *Config) Validate() error {
-	if c.App.Env == "prod" && c.JWT.Secret == "change-me-in-production" {
-		return fmt.Errorf("JWT_SECRET must be set in production")
+	if c.App.Env == "prod" {
+		if c.JWT.Secret == "change-me-in-production" {
+			return fmt.Errorf("JWT_SECRET must be set in production")
+		}
+		if len(c.Server.AllowedOrigins) == 0 {
+			return fmt.Errorf("ALLOWED_ORIGINS must be set in production (empty whitelist allows any WebSocket origin)")
+		}
 	}
 	if c.Server.Port == "" {
 		return fmt.Errorf("SERVER_PORT is required")
@@ -234,4 +242,20 @@ func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
 		}
 	}
 	return defaultVal
+}
+
+// getEnvList 解析逗号分隔的环境变量为切片，自动去空白、丢弃空条目；未设置返回 nil
+func getEnvList(key string) []string {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
 }

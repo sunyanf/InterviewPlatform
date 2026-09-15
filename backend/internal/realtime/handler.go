@@ -55,7 +55,8 @@ type Handler struct {
 }
 
 // NewHandler 创建实时面试 Handler。speech 传 nil 时，chat 消息的 tts 选项会返回 TTS_UNAVAILABLE。
-func NewHandler(jwtMgr *jwt.Manager, svc InterviewService, ag ChatAgent, speech SpeechSynthesizer, log *slog.Logger) *Handler {
+// allowedOrigins 为空时放行所有来源（仅本地开发）；生产环境必须配置 WS Origin 白名单。
+func NewHandler(jwtMgr *jwt.Manager, svc InterviewService, ag ChatAgent, speech SpeechSynthesizer, allowedOrigins []string, log *slog.Logger) *Handler {
 	return &Handler{
 		jwtMgr: jwtMgr,
 		svc:    svc,
@@ -66,8 +67,7 @@ func NewHandler(jwtMgr *jwt.Manager, svc InterviewService, ag ChatAgent, speech 
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
-			// MVP 阶段前后端分离开发，允许跨域 WS；生产应由同源策略 / 网关保证
-			CheckOrigin: func(r *http.Request) bool { return true },
+			CheckOrigin:     newOriginChecker(allowedOrigins),
 		},
 	}
 }

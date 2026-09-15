@@ -22,6 +22,7 @@ type Config struct {
 	ASR       ASRConfig
 	TTS       TTSConfig
 	Embedding EmbeddingConfig
+	Task      TaskConfig
 	Log       LogConfig
 }
 
@@ -112,6 +113,14 @@ type LogConfig struct {
 	Format string // text / json
 }
 
+// TaskConfig 异步任务 worker 参数
+type TaskConfig struct {
+	Workers         int           // 并发 worker 数
+	PollInterval    time.Duration // 空队列轮询间隔
+	LeaseTimeout    time.Duration // 单任务执行租约
+	ShutdownTimeout time.Duration // 关闭等待在途任务上限
+}
+
 // Load 从环境变量加载配置
 func Load() (*Config, error) {
 	_ = godotenv.Load() // .env 文件可选
@@ -184,6 +193,12 @@ func Load() (*Config, error) {
 		Log: LogConfig{
 			Level:  getEnv("LOG_LEVEL", "info"),
 			Format: getEnv("LOG_FORMAT", "json"),
+		},
+		Task: TaskConfig{
+			Workers:         getEnvInt("TASK_WORKERS", 2),
+			PollInterval:    getEnvDuration("TASK_POLL_INTERVAL", 2*time.Second),
+			LeaseTimeout:    getEnvDuration("TASK_LEASE_TIMEOUT", 5*time.Minute),
+			ShutdownTimeout: getEnvDuration("TASK_SHUTDOWN_TIMEOUT", 20*time.Second),
 		},
 	}
 

@@ -23,6 +23,7 @@ type Config struct {
 	TTS       TTSConfig
 	Embedding EmbeddingConfig
 	Task      TaskConfig
+	Security  SecurityConfig
 	Log       LogConfig
 }
 
@@ -72,7 +73,8 @@ type StorageConfig struct {
 
 type JWTConfig struct {
 	Secret     string
-	ExpireTime time.Duration
+	ExpireTime time.Duration // access token 有效期
+	RefreshTTL time.Duration // refresh token 有效期
 	Issuer     string
 }
 
@@ -121,6 +123,15 @@ type TaskConfig struct {
 	ShutdownTimeout time.Duration // 关闭等待在途任务上限
 }
 
+// SecurityConfig 安全策略（请求体上限与限流均按单实例 MVP 设定）
+type SecurityConfig struct {
+	MaxBodyBytes      int64 // JSON 类请求体上限
+	MaxUploadBytes    int64 // multipart 上传请求体上限（简历/录音 ≤10MB + 边界开销）
+	RateLimitEnabled  bool  // 是否启用内存限流（多实例部署需改为 Redis 版）
+	AuthRatePerMinute int   // 登录/注册/刷新按 IP 的每分钟请求数
+	APIRatePerMinute  int   // 鉴权 API 按用户、公开 API 按 IP 的每分钟请求数
+}
+
 // Load 从环境变量加载配置
 func Load() (*Config, error) {
 	_ = godotenv.Load() // .env 文件可选
@@ -159,7 +170,8 @@ func Load() (*Config, error) {
 		},
 		JWT: JWTConfig{
 			Secret:     getEnv("JWT_SECRET", "change-me-in-production"),
-			ExpireTime: getEnvDuration("JWT_EXPIRE_TIME", 24*time.Hour),
+			ExpireTime: getEnvDuration("JWT_EXPIRE_TIME", 2*time.Hour),
+			RefreshTTL: getEnvDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
 			Issuer:     getEnv("JWT_ISSUER", "ai-interview-platform"),
 		},
 		LLM: LLMConfig{
@@ -199,6 +211,13 @@ func Load() (*Config, error) {
 			PollInterval:    getEnvDuration("TASK_POLL_INTERVAL", 2*time.Second),
 			LeaseTimeout:    getEnvDuration("TASK_LEASE_TIMEOUT", 5*time.Minute),
 			ShutdownTimeout: getEnvDuration("TASK_SHUTDOWN_TIMEOUT", 20*time.Second),
+		},
+		Security: SecurityConfig{
+			MaxBodyBytes:      int64(getEnvInt("MAX_BODY_BYTES", 1<<20)),
+			MaxUploadBytes:    int64(getEnvInt("MAX_UPLOAD_BYTES", 12<<20)),
+			RateLimitEnabled:  getEnvBool("RATE_LIMIT_ENABLED", true),
+			AuthRatePerMinute: getEnvInt("AUTH_RATE_PER_MINUTE", 10),
+			APIRatePerMinute:  getEnvInt("API_RATE_PER_MINUTE", 120),
 		},
 	}
 

@@ -51,11 +51,12 @@ type taskStore interface {
 // Runner 轮询 tasks 表并分发执行。
 // 生命周期：Start 派生内部 ctx；Shutdown 停止领取新任务并等待在途任务（有界）。
 type Runner struct {
-	repo     taskStore
-	handlers map[string]JobHandler
-	cfg      Config
-	workerID string
-	log      *slog.Logger
+	repo        taskStore
+	handlers    map[string]JobHandler
+	failureHook func(ctx context.Context, t *Task)
+	cfg         Config
+	workerID    string
+	log         *slog.Logger
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -75,6 +76,12 @@ func NewRunner(repo taskStore, cfg Config, workerID string, log *slog.Logger) *R
 // Register 注册任务处理器（必须在 Start 前完成）
 func (r *Runner) Register(taskType string, h JobHandler) {
 	r.handlers[taskType] = h
+}
+
+// SetFailureHook 注册"任务重试耗尽、进入 failed 终态"后的回调（必须在 Start 前设置）。
+// 回调中的业务补偿（如回写业务状态）使用独立 ctx，不阻塞在途任务关闭语义。
+func (r *Runner) SetFailureHook(h func(ctx context.Context, t *Task)) {
+	r.failureHook = h
 }
 
 // Start 启动 worker pool 与僵死任务回收器
@@ -152,8 +159,7 @@ func (r *Runner) execute(_ context.Context, t *Task) {
 	h, ok := r.handlers[t.Type]
 	if !ok {
 		r.log.Error("unknown task type", "task_id", t.ID, "type", t.Type)
-		_ = r.repo.MarkFailed(context.Background(), t.ID, ErrUnknownHandler.Error(),
-			backoffForAttempt(t.Attempts))
+		r.fail(t, ErrUnknownHandler.Error())
 		return
 	}
 
@@ -163,10 +169,7 @@ func (r *Runner) execute(_ context.Context, t *Task) {
 	if err := h(jobCtx, t.Payload); err != nil {
 		r.log.Error("task failed", "task_id", t.ID, "type", t.Type,
 			"attempts", t.Attempts, "error", err)
-		if merr := r.repo.MarkFailed(context.Background(), t.ID, err.Error(),
-			backoffForAttempt(t.Attempts)); merr != nil {
-			r.log.Error("mark task failed error", "task_id", t.ID, "error", merr)
-		}
+		r.fail(t, err.Error())
 		return
 	}
 
@@ -175,6 +178,22 @@ func (r *Runner) execute(_ context.Context, t *Task) {
 		return
 	}
 	r.log.Info("task succeeded", "task_id", t.ID, "type", t.Type, "attempts", t.Attempts)
+}
+
+// fail 标记任务失败；重试耗尽进入 failed 终态时触发业务补偿钩子
+func (r *Runner) fail(t *Task, errMsg string) {
+	if merr := r.repo.MarkFailed(context.Background(), t.ID, errMsg,
+		backoffForAttempt(t.Attempts)); merr != nil {
+		r.log.Error("mark task failed error", "task_id", t.ID, "error", merr)
+		return
+	}
+	if t.Attempts >= t.MaxAttempts && r.failureHook != nil {
+		t.Status = StatusFailed
+		t.LastError = errMsg
+		hookCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		r.failureHook(hookCtx, t)
+	}
 }
 
 // reaper 定期回收租约超时的 running 任务（worker 崩溃遗留）

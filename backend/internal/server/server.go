@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -51,6 +52,8 @@ type Server struct {
 	reportSvc *report.Service
 	taskRepo  *task.Repository
 	runner    *task.Runner
+	authLimit *appmiddleware.Limiter
+	apiLimit  *appmiddleware.Limiter
 	agent     *agent.Agent
 	http      *http.Server
 }
@@ -122,6 +125,26 @@ func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Man
 	s.runner.Register(task.TypeResumeParse, s.resumeSvc.RunParseTask)
 	s.runner.Register(task.TypeSessionEvaluation, s.evalSvc.RunEvaluationTask)
 	s.runner.Register(task.TypeReportGeneration, s.reportSvc.RunGenerateTask)
+	// 简历解析任务重试耗尽后把简历状态回写 failed（避免卡在 parsing）
+	s.runner.SetFailureHook(func(ctx context.Context, t *task.Task) {
+		if t.Type != task.TypeResumeParse {
+			return
+		}
+		var p task.ResumeParsePayload
+		if err := json.Unmarshal(t.Payload, &p); err != nil || p.ResumeID == "" {
+			return
+		}
+		if err := resumeRepo.UpdateStatus(ctx, p.ResumeID, resume.StatusFailed); err != nil {
+			log.Error("mark resume failed after task exhaustion",
+				"resume_id", p.ResumeID, "task_id", t.ID, "error", err)
+		}
+	})
+
+	// 限流器：登录/注册/刷新按 IP 严格限流；其余 API 按用户（未登录按 IP）
+	if cfg.Security.RateLimitEnabled {
+		s.authLimit = appmiddleware.NewLimiter(cfg.Security.AuthRatePerMinute, cfg.Security.AuthRatePerMinute)
+		s.apiLimit = appmiddleware.NewLimiter(cfg.Security.APIRatePerMinute, cfg.Security.APIRatePerMinute/2)
+	}
 
 	r := s.routes()
 
@@ -141,6 +164,7 @@ func (s *Server) routes() http.Handler {
 
 	// 全局中间件
 	r.Use(appmiddleware.RequestID)
+	r.Use(appmiddleware.SecureHeaders)
 	r.Use(appmiddleware.Logger(s.log))
 	r.Use(middleware.Recoverer)
 
@@ -151,9 +175,26 @@ func (s *Server) routes() http.Handler {
 
 	// API v1
 	r.Route("/api/v1", func(r chi.Router) {
-		// 公开路由
-		r.Post("/auth/register", s.userHandler().Register)
-		r.Post("/auth/login", s.userHandler().Login)
+		r.Use(appmiddleware.CORS(s.cfg.Server.AllowedOrigins))
+		// 全局限流（未登录按 IP，登录后按用户）
+		if s.apiLimit != nil {
+			r.Use(appmiddleware.RateLimit(s.apiLimit, appmiddleware.KeyByUser))
+		}
+
+		// 公开路由（登录/注册/刷新按 IP 严格限流；JSON 体受限）
+		authLimit := func(next http.Handler) http.Handler { return next }
+		if s.authLimit != nil {
+			authLimit = appmiddleware.RateLimit(s.authLimit, appmiddleware.KeyByIP)
+		}
+		authChain := []func(http.Handler) http.Handler{
+			authLimit,
+			appmiddleware.MaxBody(s.cfg.Security.MaxBodyBytes),
+		}
+		r.With(authChain...).Post("/auth/register", s.userHandler().Register)
+		r.With(authChain...).Post("/auth/login", s.userHandler().Login)
+		r.With(authChain...).Post("/auth/refresh", s.userHandler().Refresh)
+		r.With(appmiddleware.MaxBody(s.cfg.Security.MaxBodyBytes)).
+			Post("/auth/logout", s.userHandler().Logout)
 
 		// 岗位公开接口
 		r.Get("/jobs/categories", s.jobHandler().ListCategories)
@@ -164,16 +205,22 @@ func (s *Server) routes() http.Handler {
 		// 由 handler 自行校验 query token，故不放在 Auth 中间件组内
 		r.Get("/interviews/{id}/ws", s.realtimeHandler().HandleWS)
 
-		// 需要鉴权的路由
+		// 上传类端点：multipart 放宽请求体上限（简历 / 录音 ≤10MB）
+		r.With(appmiddleware.Auth(s.jwtMgr), appmiddleware.MaxBody(s.cfg.Security.MaxUploadBytes)).
+			Post("/resumes", s.resumeHandler().Upload)
+		r.With(appmiddleware.Auth(s.jwtMgr), appmiddleware.MaxBody(s.cfg.Security.MaxUploadBytes)).
+			Post("/answers/{questionID}/audio", s.audioHandler().Upload)
+
+		// 需要鉴权的路由（JSON 请求体受 MaxBodyBytes 限制）
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.Auth(s.jwtMgr))
+			r.Use(appmiddleware.MaxBody(s.cfg.Security.MaxBodyBytes))
 			r.Get("/me", s.userHandler().Me)
 
 			// 岗位管理
 			r.Post("/jobs", s.jobHandler().CreateJob)
 
 			// 简历
-			r.Post("/resumes", s.resumeHandler().Upload)
 			r.Get("/resumes", s.resumeHandler().List)
 			r.Get("/resumes/{id}", s.resumeHandler().Get)
 			r.Post("/resumes/{id}/parse", s.resumeHandler().Parse)
@@ -211,8 +258,7 @@ func (s *Server) routes() http.Handler {
 			// 异步任务状态查询
 			r.Get("/tasks/{taskID}", s.taskHandler().Get)
 
-			// 语音（答案录音）
-			r.Post("/answers/{questionID}/audio", s.audioHandler().Upload)
+			// 语音（答案录音；上传端点在组外，multipart 体更宽）
 			r.Post("/answers/{questionID}/audio/transcribe", s.audioHandler().Transcribe)
 			r.Post("/answers/{questionID}/audio/analyze", s.audioHandler().Analyze)
 			r.Get("/answers/{questionID}/audio", s.audioHandler().Get)
@@ -225,7 +271,7 @@ func (s *Server) routes() http.Handler {
 // userHandler 初始化用户 Handler
 func (s *Server) userHandler() *user.Handler {
 	repo := user.NewRepository(s.db)
-	svc := user.NewService(repo, s.jwtMgr)
+	svc := user.NewService(repo, s.jwtMgr, s.cfg.JWT.RefreshTTL, s.log)
 	return user.NewHandler(svc)
 }
 
@@ -324,19 +370,31 @@ func (a knowledgeRetriever) RetrieveForQuery(ctx context.Context, query string, 
 	return snippets, nil
 }
 
-// Start 启动服务器（含异步任务 worker）
+// Start 启动服务器（含异步任务 worker 与限流清理）
 func (s *Server) Start(baseCtx context.Context) error {
 	s.runner.Start(baseCtx)
+	if s.authLimit != nil {
+		s.authLimit.Start(baseCtx)
+	}
+	if s.apiLimit != nil {
+		s.apiLimit.Start(baseCtx)
+	}
 	s.log.Info("server starting", "addr", s.http.Addr)
 	return s.http.ListenAndServe()
 }
 
-// Shutdown 优雅关闭：先停 HTTP 接收，再等待在途任务
+// Shutdown 优雅关闭：先停 HTTP 接收，再等待在途任务与限流清理
 func (s *Server) Shutdown(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	httpErr := s.http.Shutdown(shutdownCtx)
 	s.runner.Shutdown()
+	if s.authLimit != nil {
+		s.authLimit.Shutdown()
+	}
+	if s.apiLimit != nil {
+		s.apiLimit.Shutdown()
+	}
 	return httpErr
 }
 

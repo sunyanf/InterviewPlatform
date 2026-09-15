@@ -13,10 +13,31 @@
 # 2. 认证
 
 ```text
-POST /api/v1/auth/register
-POST /api/v1/auth/login
-GET  /api/v1/me
+POST /api/v1/auth/register   注册即登录，返回令牌对
+POST /api/v1/auth/login      登录，返回令牌对
+POST /api/v1/auth/refresh    旋转 refresh token，换取新令牌对
+POST /api/v1/auth/logout     吊销 refresh token（幂等）
+GET  /api/v1/me              当前用户资料（需 Bearer access token）
 ```
+
+登录/注册/刷新响应体：
+
+```json
+{
+  "token": "<access JWT，2h>",
+  "refresh_token": "<256bit 随机串，30d；数据库仅存其 SHA-256>",
+  "expires_in": 7200,
+  "user": { "id": "...", "email": "...", "nickname": "..." }
+}
+```
+
+刷新与安全策略：
+
+- access token 过期后用 refresh token 调 `/auth/refresh`；**refresh token 一次性旋转**，旧 token 立即吊销；
+- 已吊销的 refresh token 被再次使用视为被盗：该用户全部活跃 token 被吊销，需重新登录；
+- 登录/注册/刷新按 IP 限流（默认 10 次/分钟，超限 429 `RATE_LIMITED`）；其他 API 按用户限流（默认 120 次/分钟）；
+- JSON 请求体上限 1MiB（413 `PAYLOAD_TOO_LARGE`），简历/录音上传上限 12MiB；
+- 跨域由 `ALLOWED_ORIGINS` 精确白名单控制（生产必须配置）。
 
 ---
 

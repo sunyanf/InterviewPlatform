@@ -27,8 +27,10 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
-// LoginResponse 登录响应
+// LoginResponse 登录/注册/刷新成功后的令牌对
 type LoginResponse struct {
-	Token string `json:"token"`
-	User  *User  `json:"user"`
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int64  `json:"expires_in"` // access token 有效期（秒）
+	User         *User  `json:"user"`
 }

@@ -50,6 +50,8 @@ var (
 	ErrForbidden           = New("FORBIDDEN", "无权限", http.StatusForbidden)
 	ErrNotFound            = New("NOT_FOUND", "资源不存在", http.StatusNotFound)
 	ErrConflict            = New("CONFLICT", "资源冲突", http.StatusConflict)
+	ErrRateLimited         = New("RATE_LIMITED", "请求过于频繁，请稍后再试", http.StatusTooManyRequests)
+	ErrPayloadTooLarge     = New("PAYLOAD_TOO_LARGE", "请求体超过大小限制", http.StatusRequestEntityTooLarge)
 	ErrInternalServerError = New("INTERNAL_SERVER_ERROR", "服务器内部错误", http.StatusInternalServerError)
 
 	// 认证相关

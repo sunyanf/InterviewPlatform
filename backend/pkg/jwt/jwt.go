@@ -51,6 +51,11 @@ func (m *Manager) Generate(userID, email string) (string, error) {
 	return token.SignedString(m.secret)
 }
 
+// TTL 返回 access token 有效期（用于 expires_in 字段与刷新判定）
+func (m *Manager) TTL() time.Duration {
+	return m.expireTime
+}
+
 // Parse 解析并验证 Token
 func (m *Manager) Parse(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {

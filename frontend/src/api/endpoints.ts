@@ -13,6 +13,8 @@ import type {
   Resume,
   SpeechResult,
   SubmitAnswerResult,
+  TaskAccepted,
+  TaskInfo,
   User,
 } from './types'
 
@@ -40,7 +42,7 @@ export const resumeApi = {
   upload: (file: File) => uploadFile<Resume>('/resumes', 'file', file),
   list: () => api.get<Resume[]>('/resumes'),
   get: (id: string) => api.get<Resume>(`/resumes/${id}`),
-  parse: (id: string) => api.post<Resume>(`/resumes/${id}/parse`),
+  parse: (id: string) => api.post<TaskAccepted>(`/resumes/${id}/parse`),
   match: (id: string, jobId: string) =>
     api.post<MatchResult>(`/resumes/${id}/match?job_id=${encodeURIComponent(jobId)}`),
 }
@@ -57,14 +59,20 @@ export const interviewApi = {
 }
 
 export const evaluationApi = {
+  // 异步：返回 202 + task_id，凭 taskApi.waitFor 等待完成
   run: (sessionId: string) =>
-    api.post<Evaluation>(`/evaluations/sessions/${encodeURIComponent(sessionId)}`),
+    api.post<TaskAccepted>(`/evaluations/sessions/${encodeURIComponent(sessionId)}`),
   get: (sessionId: string) =>
     api.get<Evaluation>(`/evaluations/sessions/${encodeURIComponent(sessionId)}`),
 }
 
 export const reportApi = {
   generate: (sessionId: string) =>
-    api.post<Report>(`/reports/sessions/${encodeURIComponent(sessionId)}`),
-  get: (sessionId: string) => api.get<Report>(`/reports/sessions/${encodeURIComponent(sessionId)}`),
+    api.post<TaskAccepted>(`/reports/sessions/${encodeURIComponent(sessionId)}`),
+  get: (sessionId: string) =>
+    api.get<Report>(`/reports/sessions/${encodeURIComponent(sessionId)}`),
+}
+
+export const taskApi = {
+  get: (taskId: string) => api.get<TaskInfo>(`/tasks/${encodeURIComponent(taskId)}`),
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { evaluationApi, reportApi } from '../api/endpoints'
 import { ApiError } from '../api/client'
+import { TaskFailedError, waitForTask } from '../api/taskPolling'
 import type { Evaluation, Report } from '../api/types'
 
 type Phase = 'evaluating' | 'generating' | 'done' | 'error'
@@ -24,36 +25,47 @@ export default function ReportPage() {
     let cancelled = false
 
     const fail = (err: unknown) => {
-      setErrorMsg(err instanceof ApiError ? err.message : '评估服务暂不可用')
+      if (err instanceof TaskFailedError) {
+        setErrorMsg(err.message || '评估任务执行失败')
+      } else {
+        setErrorMsg(err instanceof ApiError ? err.message : '评估服务暂不可用')
+      }
       setPhase('error')
     }
 
-    // 不存在则触发；404 → POST 生成，存在 → GET 复用（报告可重跑覆盖）
-    const getOrCreate = async <T,>(get: () => Promise<T>, create: () => Promise<T>): Promise<T> => {
-      try {
-        return await get()
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 404) return create()
-        throw err
-      }
-    }
-
+    // GET 复用已有产物；404 → POST 提交异步任务（202）→ 轮询至成功 → GET 拉取产物
     async function run() {
       try {
-        const e = await getOrCreate(
-          () => evaluationApi.get(id),
-          () => evaluationApi.run(id),
-        )
+        let evaluation: Evaluation
+        try {
+          evaluation = await evaluationApi.get(id)
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 404) {
+            const accepted = await evaluationApi.run(id)
+            await waitForTask(accepted)
+            evaluation = await evaluationApi.get(id)
+          } else {
+            throw err
+          }
+        }
         if (cancelled) return
-        setEvaluation(e)
+        setEvaluation(evaluation)
         setPhase('generating')
 
-        const r = await getOrCreate(
-          () => reportApi.get(id),
-          () => reportApi.generate(id),
-        )
+        let report: Report
+        try {
+          report = await reportApi.get(id)
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 404) {
+            const accepted = await reportApi.generate(id)
+            await waitForTask(accepted)
+            report = await reportApi.get(id)
+          } else {
+            throw err
+          }
+        }
         if (cancelled) return
-        setReport(r)
+        setReport(report)
         setPhase('done')
       } catch (err) {
         if (!cancelled) fail(err)

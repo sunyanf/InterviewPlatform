@@ -255,3 +255,22 @@ export interface SpeechResult {
   cached: boolean
   download_expire_seconds: number
 }
+
+// ---------- async task ----------
+export interface TaskAccepted {
+  task_id: string
+  status: 'pending' | 'running'
+}
+
+export type TaskStatus = 'pending' | 'running' | 'succeeded' | 'failed'
+
+export interface TaskInfo {
+  id: string
+  type: string
+  status: TaskStatus
+  attempts: number
+  max_attempts: number
+  last_error: string
+  created_at: string
+  updated_at: string
+}

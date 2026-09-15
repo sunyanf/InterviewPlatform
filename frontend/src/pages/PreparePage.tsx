@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { interviewApi, jobApi, resumeApi } from '../api/endpoints'
 import type { Resume } from '../api/types'
 import { ApiError } from '../api/client'
+import { TaskFailedError, waitForTask } from '../api/taskPolling'
 
 type InterviewType = 'technical' | 'behavioral' | 'mixed'
 
@@ -30,14 +31,22 @@ export default function PreparePage() {
     setUploadMsg('')
     setError('')
     try {
-      // 上传 → 解析（mock parser 即刻返回结构化简历）
+      // 上传 → 提交解析任务（202）→ 轮询至完成 → 拉取解析后详情
       const rs: Resume = await resumeApi.upload(file)
-      const parsed = await resumeApi.parse(rs.id)
+      setUploadMsg('已上传，正在解析简历…')
+      const accepted = await resumeApi.parse(rs.id)
+      await waitForTask(accepted)
+      const parsed = await resumeApi.get(rs.id)
       setResumeId(parsed.id)
       setUploadMsg(`「${parsed.file_name}」解析完成，识别 ${parsed.skills.length} 项技能`)
       await refetch()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '简历上传失败')
+      if (err instanceof TaskFailedError) {
+        setError(`简历解析失败：${err.message}`)
+      } else {
+        setError(err instanceof ApiError ? err.message : '简历上传失败')
+      }
+      setUploadMsg('')
     } finally {
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ''

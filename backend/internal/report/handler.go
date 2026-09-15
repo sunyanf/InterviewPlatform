@@ -19,17 +19,17 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// Generate 触发生成报告（重跑覆盖；前置：评估已完成）
+// Generate 提交报告生成任务（异步：202 + task_id；前置：评估已完成）
 func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r.Context())
 	sessionID := chi.URLParam(r, "sessionID")
 
-	rp, err := h.svc.Generate(r.Context(), userID, sessionID)
+	view, err := h.svc.RequestGenerate(r.Context(), userID, sessionID)
 	if err != nil {
 		response.Error(w, err)
 		return
 	}
-	response.Created(w, rp)
+	response.Accepted(w, view)
 }
 
 // Get 查询会话报告

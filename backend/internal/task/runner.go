@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// Handler 任务处理器：由业务模块注册，payload 为入队时的 JSON。
+// JobHandler 任务处理器：由业务模块注册，payload 为入队时的 JSON。
 // 返回 error 时 worker 按退避策略重试；处理器内部必须自行保证业务幂等（评估/报告均为 Upsert）。
-type Handler func(ctx context.Context, payload json.RawMessage) error
+type JobHandler func(ctx context.Context, payload json.RawMessage) error
 
 // Config worker 运行参数
 type Config struct {
@@ -52,7 +52,7 @@ type taskStore interface {
 // 生命周期：Start 派生内部 ctx；Shutdown 停止领取新任务并等待在途任务（有界）。
 type Runner struct {
 	repo     taskStore
-	handlers map[string]Handler
+	handlers map[string]JobHandler
 	cfg      Config
 	workerID string
 	log      *slog.Logger
@@ -65,7 +65,7 @@ type Runner struct {
 func NewRunner(repo taskStore, cfg Config, workerID string, log *slog.Logger) *Runner {
 	return &Runner{
 		repo:     repo,
-		handlers: make(map[string]Handler),
+		handlers: make(map[string]JobHandler),
 		cfg:      cfg.withDefaults(),
 		workerID: workerID,
 		log:      log,
@@ -73,7 +73,7 @@ func NewRunner(repo taskStore, cfg Config, workerID string, log *slog.Logger) *R
 }
 
 // Register 注册任务处理器（必须在 Start 前完成）
-func (r *Runner) Register(taskType string, h Handler) {
+func (r *Runner) Register(taskType string, h JobHandler) {
 	r.handlers[taskType] = h
 }
 

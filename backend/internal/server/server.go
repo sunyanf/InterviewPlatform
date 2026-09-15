@@ -2,12 +2,15 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ai-interview-platform/internal/agent"
@@ -21,6 +24,7 @@ import (
 	"ai-interview-platform/internal/realtime"
 	"ai-interview-platform/internal/report"
 	"ai-interview-platform/internal/resume"
+	"ai-interview-platform/internal/task"
 	ttssvc "ai-interview-platform/internal/tts"
 	"ai-interview-platform/internal/user"
 	"ai-interview-platform/pkg/asr"
@@ -43,6 +47,10 @@ type Server struct {
 	asr       asr.ASR
 	ttsProv   provider.TTS
 	resumeSvc *resume.Service
+	evalSvc   *evaluation.Service
+	reportSvc *report.Service
+	taskRepo  *task.Repository
+	runner    *task.Runner
 	agent     *agent.Agent
 	http      *http.Server
 }
@@ -86,13 +94,34 @@ func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Man
 	log.Info("tts provider initialized", "provider", ttsProv.Name(),
 		"model", cfg.TTS.Model, "voice", cfg.TTS.Voice, "format", cfg.TTS.Format)
 
+	// 共享的任务仓储与业务 Service（HTTP handler 与 worker 共用同一组实例）
+	s.taskRepo = task.NewRepository(db)
+
 	// 共享的简历 Service（面试模块依赖）
 	resumeRepo := resume.NewRepository(db)
 	jobRepo := job.NewRepository(db)
-	s.resumeSvc = resume.NewService(resumeRepo, st, llmProv, jobRepo, log)
+	s.resumeSvc = resume.NewService(resumeRepo, st, llmProv, jobRepo, s.taskRepo, log)
 
 	// 共享的 Agent（AI 编排）
 	s.agent = agent.New(llmProv, log)
+
+	// 评估/报告 Service 单例（HTTP 入队与 worker 执行共用）
+	interviewRepo := interview.NewRepository(db)
+	evalRepo := evaluation.NewRepository(db)
+	s.evalSvc = evaluation.NewService(evalRepo, interviewRepo, s.agent, s.taskRepo, log)
+	s.reportSvc = report.NewService(
+		report.NewRepository(db), evalRepo, interviewRepo, s.agent, s.taskRepo, log)
+
+	// 异步任务 worker：注册三类长耗时 LLM 任务处理器
+	s.runner = task.NewRunner(s.taskRepo, task.Config{
+		Workers:         cfg.Task.Workers,
+		PollInterval:    cfg.Task.PollInterval,
+		LeaseTimeout:    cfg.Task.LeaseTimeout,
+		ShutdownTimeout: cfg.Task.ShutdownTimeout,
+	}, workerID(), log)
+	s.runner.Register(task.TypeResumeParse, s.resumeSvc.RunParseTask)
+	s.runner.Register(task.TypeSessionEvaluation, s.evalSvc.RunEvaluationTask)
+	s.runner.Register(task.TypeReportGeneration, s.reportSvc.RunGenerateTask)
 
 	r := s.routes()
 
@@ -179,6 +208,9 @@ func (s *Server) routes() http.Handler {
 			r.Get("/reports/sessions/{sessionID}", s.reportHandler().Get)
 			r.Get("/reports", s.reportHandler().List)
 
+			// 异步任务状态查询
+			r.Get("/tasks/{taskID}", s.taskHandler().Get)
+
 			// 语音（答案录音）
 			r.Post("/answers/{questionID}/audio", s.audioHandler().Upload)
 			r.Post("/answers/{questionID}/audio/transcribe", s.audioHandler().Transcribe)
@@ -228,18 +260,12 @@ func (s *Server) knowledgeHandler() *knowledge.Handler {
 
 // evaluationHandler 初始化评估 Handler
 func (s *Server) evaluationHandler() *evaluation.Handler {
-	evalRepo := evaluation.NewRepository(s.db)
-	interviewRepo := interview.NewRepository(s.db)
-	svc := evaluation.NewService(evalRepo, interviewRepo, s.agent, s.log)
-	return evaluation.NewHandler(svc)
+	return evaluation.NewHandler(s.evalSvc)
 }
 
 // reportHandler 初始化报告 Handler
 func (s *Server) reportHandler() *report.Handler {
-	evalRepo := evaluation.NewRepository(s.db)
-	interviewRepo := interview.NewRepository(s.db)
-	svc := report.NewService(report.NewRepository(s.db), evalRepo, interviewRepo, s.agent, s.log)
-	return report.NewHandler(svc)
+	return report.NewHandler(s.reportSvc)
 }
 
 // audioHandler 初始化语音 Handler
@@ -298,15 +324,32 @@ func (a knowledgeRetriever) RetrieveForQuery(ctx context.Context, query string, 
 	return snippets, nil
 }
 
-// Start 启动服务器
-func (s *Server) Start() error {
+// Start 启动服务器（含异步任务 worker）
+func (s *Server) Start(baseCtx context.Context) error {
+	s.runner.Start(baseCtx)
 	s.log.Info("server starting", "addr", s.http.Addr)
 	return s.http.ListenAndServe()
 }
 
-// Shutdown 优雅关闭
+// Shutdown 优雅关闭：先停 HTTP 接收，再等待在途任务
 func (s *Server) Shutdown(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return s.http.Shutdown(shutdownCtx)
+	httpErr := s.http.Shutdown(shutdownCtx)
+	s.runner.Shutdown()
+	return httpErr
+}
+
+// taskHandler 初始化任务查询 Handler
+func (s *Server) taskHandler() *task.Handler {
+	return task.NewHandler(s.taskRepo)
+}
+
+// workerID 生成进程内 worker 标识（锁/日志追踪用）
+func workerID() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
+	}
+	return fmt.Sprintf("%s-%s", host, uuid.New().String()[:8])
 }

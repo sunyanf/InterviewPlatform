@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -57,9 +58,9 @@ func main() {
 	// 初始化 HTTP Server
 	srv := server.New(cfg, db, log, jwtMgr, st, llmProv)
 
-	// 启动服务（goroutine）
+	// 启动服务（HTTP + 异步任务 worker）
 	go func() {
-		if err := srv.Start(); err != nil {
+		if err := srv.Start(ctx); err != nil && err != http.ErrServerClosed {
 			log.Error("server stopped", "error", err)
 		}
 	}()

@@ -35,7 +35,7 @@ POST /api/v1/jobs
 ```text
 POST /api/v1/resumes
 GET  /api/v1/resumes/:id
-POST /api/v1/resumes/:id/parse
+POST /api/v1/resumes/:id/parse   提交解析任务（异步，返回 202 + task_id）
 ```
 
 ---
@@ -137,10 +137,12 @@ POST   /api/v1/knowledge/search      混合检索（向量 + FTS + 关键词，R
 需要鉴权。仅对 `COMPLETED` 状态的面试可评估；同一会话重跑覆盖。
 
 ```text
-POST /api/v1/evaluations/sessions/:sessionID   触发评估（LLM 维度评分 → 确定性总分）
+POST /api/v1/evaluations/sessions/:sessionID   提交评估任务（异步 202 + task_id；LLM 维度评分 → 确定性总分）
 GET  /api/v1/evaluations/sessions/:sessionID   查询会话评估（未评估 404）
 GET  /api/v1/evaluations                       当前用户评估列表
 ```
+
+> POST 为**异步**：HTTP 202 返回 `task_id`，轮询 `GET /api/v1/tasks/:taskID` 至 succeeded 后再 GET 评估结果（见 5.8）。
 
 评估基于证据（AGENTS.md #15）：LLM 只输出维度分（0-100）+ 证据（引用回答原文）+ 改进建议；
 **总分由业务代码按 Rubric 权重确定性计算**：`correctness 0.30 + depth 0.25 + logic 0.25 + communication 0.20`。
@@ -170,7 +172,7 @@ GET  /api/v1/evaluations                       当前用户评估列表
 需要鉴权。仅对 `COMPLETED` 且**已评估**的面试可生成报告（未评估 404 `EVALUATION_REQUIRED`）；同一会话重跑覆盖。
 
 ```text
-POST /api/v1/reports/sessions/:sessionID   触发生成报告
+POST /api/v1/reports/sessions/:sessionID   提交报告生成任务（异步 202 + task_id）
 GET  /api/v1/reports/sessions/:sessionID   查询会话报告（未生成 404）
 GET  /api/v1/reports                       当前用户报告列表
 ```
@@ -213,7 +215,54 @@ GET  /api/v1/reports                       当前用户报告列表
 
 ---
 
-# 5.8 语音（Audio）
+# 5.8 异步任务（Task）
+
+长耗时 LLM 操作（简历解析、面试评估、报告生成）统一走异步任务：POST 端点立即返回 **HTTP 202**，由后台 worker 执行，客户端凭 `task_id` 轮询状态。
+
+```text
+GET /api/v1/tasks/:taskID   查询任务状态（仅可查询本人提交的任务，跨用户 404）
+```
+
+202 响应体：
+
+```json
+{
+  "code": "ACCEPTED",
+  "message": "accepted",
+  "data": { "task_id": "01J...", "status": "pending" }
+}
+```
+
+任务状态响应：
+
+```json
+{
+  "id": "01J...",
+  "type": "session_evaluation",
+  "status": "succeeded",
+  "attempts": 1,
+  "max_attempts": 3,
+  "last_error": "",
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+状态机：`pending → running → succeeded | failed`。失败按指数退避自动重试（10s/20s/40s，上限 2 分钟，共 max_attempts 次），`failed` 时读 `last_error`；达到终态前建议每 1~2 秒轮询一次。
+
+幂等：同一业务对象（如同一份简历、同一场会话）在 pending/running 期间重复提交，返回同一个进行中任务；终态后重新提交则创建新任务（重跑覆盖旧产物）。任务成功后，再 GET 对应业务资源获取产物。
+
+任务类型：
+
+```text
+resume_parse         简历解析（payload: user_id, resume_id）
+session_evaluation   面试评估（payload: user_id, session_id）
+report_generation    报告生成（payload: user_id, session_id）
+```
+
+---
+
+# 5.9 语音（Audio）
 
 需要鉴权。答案录音挂在题目上（一题一份，重传覆盖）；仅 `RUNNING` 状态会话可上传；转写与分析可重跑。
 

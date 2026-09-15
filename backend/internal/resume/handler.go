@@ -49,15 +49,16 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	response.Created(w, rs)
 }
 
-// Parse 解析简历
+// Parse 提交简历解析任务（异步：202 + task_id，前端轮询简历状态或任务状态）
 func (h *Handler) Parse(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r.Context())
 	id := chi.URLParam(r, "id")
-	rs, err := h.svc.Parse(r.Context(), id)
+	view, err := h.svc.RequestParse(r.Context(), userID, id)
 	if err != nil {
 		response.Error(w, err)
 		return
 	}
-	response.Success(w, rs)
+	response.Accepted(w, view)
 }
 
 // Get 简历详情

@@ -19,17 +19,17 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// Evaluate 触发面试评估（重跑覆盖）
+// Evaluate 提交面试评估任务（异步：202 + task_id；可重复触发，评估可重跑覆盖）
 func (h *Handler) Evaluate(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r.Context())
 	sessionID := chi.URLParam(r, "sessionID")
 
-	e, err := h.svc.Evaluate(r.Context(), userID, sessionID)
+	view, err := h.svc.RequestEvaluate(r.Context(), userID, sessionID)
 	if err != nil {
 		response.Error(w, err)
 		return
 	}
-	response.Created(w, e)
+	response.Accepted(w, view)
 }
 
 // Get 查询会话评估

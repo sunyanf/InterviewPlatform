@@ -12,11 +12,25 @@ import (
 	"github.com/google/uuid"
 
 	"ai-interview-platform/internal/job"
+	"ai-interview-platform/internal/task"
 	apperrors "ai-interview-platform/pkg/errors"
 	"ai-interview-platform/pkg/llm"
 	"ai-interview-platform/pkg/resumeparse"
 	"ai-interview-platform/pkg/storage"
 )
+
+// 简历状态
+const (
+	StatusPending = "pending" // 已上传，等待解析
+	StatusParsing = "parsing" // 解析任务排队/执行中
+	StatusParsed  = "parsed"
+	StatusFailed  = "failed"
+)
+
+// taskEnqueuer 任务入队能力（*task.Repository 实现；测试可替换）
+type taskEnqueuer interface {
+	Enqueue(ctx context.Context, req task.EnqueueRequest) (*task.Task, bool, error)
+}
 
 // Service 简历业务逻辑层
 type Service struct {
@@ -24,16 +38,18 @@ type Service struct {
 	storage storage.Storage
 	llm     llm.Provider
 	jobRepo *job.Repository
+	tasks   taskEnqueuer
 	log     *slog.Logger
 }
 
 // NewService 创建简历 Service
-func NewService(repo *Repository, st storage.Storage, llmProv llm.Provider, jobRepo *job.Repository, log *slog.Logger) *Service {
+func NewService(repo *Repository, st storage.Storage, llmProv llm.Provider, jobRepo *job.Repository, tasks taskEnqueuer, log *slog.Logger) *Service {
 	return &Service{
 		repo:    repo,
 		storage: st,
 		llm:     llmProv,
 		jobRepo: jobRepo,
+		tasks:   tasks,
 		log:     log,
 	}
 }
@@ -82,7 +98,49 @@ func (s *Service) Upload(ctx context.Context, userID, fileName string, fileSize 
 	return rs, nil
 }
 
-// Parse 解析简历（提取文本 + LLM 结构化）
+// RequestParse 提交简历解析异步任务（归属校验 + 幂等入队）。
+// 同一简历已有排队/执行中的解析任务时复用原任务，不重复入队。
+func (s *Service) RequestParse(ctx context.Context, userID, resumeID string) (*task.AcceptedView, error) {
+	rs, err := s.repo.GetByID(ctx, resumeID)
+	if err != nil {
+		return nil, apperrors.Wrap("INTERNAL_ERROR", "查询简历失败", 500, err)
+	}
+	if rs == nil {
+		return nil, apperrors.ErrNotFound
+	}
+	if rs.UserID != userID {
+		return nil, apperrors.ErrForbidden
+	}
+
+	if err := s.repo.UpdateStatus(ctx, resumeID, StatusParsing); err != nil {
+		return nil, apperrors.Wrap("INTERNAL_ERROR", "更新简历状态失败", 500, err)
+	}
+
+	t, _, err := s.tasks.Enqueue(ctx, task.EnqueueRequest{
+		Type: task.TypeResumeParse,
+		Payload: task.ResumeParsePayload{
+			UserID:   userID,
+			ResumeID: resumeID,
+		},
+		IdempotencyKey: "resume_parse:" + resumeID,
+	})
+	if err != nil {
+		return nil, apperrors.Wrap("INTERNAL_ERROR", "创建解析任务失败", 500, err)
+	}
+	return &task.AcceptedView{TaskID: t.ID, Status: t.Status}, nil
+}
+
+// RunParseTask worker 任务处理器：解码负载后执行解析
+func (s *Service) RunParseTask(ctx context.Context, raw json.RawMessage) error {
+	var p task.ResumeParsePayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return fmt.Errorf("decode resume_parse payload: %w", err)
+	}
+	_, err := s.Parse(ctx, p.ResumeID)
+	return err
+}
+
+// Parse 解析简历（提取文本 + LLM 结构化）；由 worker 调用，也可被同进程其他流程复用
 func (s *Service) Parse(ctx context.Context, resumeID string) (*Resume, error) {
 	rs, err := s.repo.GetByID(ctx, resumeID)
 	if err != nil {
@@ -107,19 +165,19 @@ func (s *Service) Parse(ctx context.Context, resumeID string) (*Resume, error) {
 	// 提取文本
 	text, err := resumeparse.ExtractText(rs.FileName, data)
 	if err != nil {
-		_ = s.repo.UpdateParseResult(ctx, resumeID, "", nil, []string{}, "failed")
+		_ = s.repo.UpdateParseResult(ctx, resumeID, "", nil, []string{}, StatusFailed)
 		return nil, apperrors.Wrap("PARSE_FAILED", "简历文本提取失败", 400, err)
 	}
 
 	if strings.TrimSpace(text) == "" {
-		_ = s.repo.UpdateParseResult(ctx, resumeID, "", nil, []string{}, "failed")
+		_ = s.repo.UpdateParseResult(ctx, resumeID, "", nil, []string{}, StatusFailed)
 		return nil, apperrors.New("EMPTY_CONTENT", "简历内容为空或无法提取", 400)
 	}
 
 	// 调用 LLM 结构化解析
 	structured, err := s.parseWithLLM(ctx, text)
 	if err != nil {
-		_ = s.repo.UpdateParseResult(ctx, resumeID, text, nil, []string{}, "failed")
+		_ = s.repo.UpdateParseResult(ctx, resumeID, text, nil, []string{}, StatusFailed)
 		return nil, apperrors.Wrap("LLM_PARSE_FAILED", "简历结构化解析失败", 500, err)
 	}
 
@@ -128,14 +186,14 @@ func (s *Service) Parse(ctx context.Context, resumeID string) (*Resume, error) {
 	if skills == nil {
 		skills = []string{}
 	}
-	if err := s.repo.UpdateParseResult(ctx, resumeID, text, structured, skills, "parsed"); err != nil {
+	if err := s.repo.UpdateParseResult(ctx, resumeID, text, structured, skills, StatusParsed); err != nil {
 		return nil, apperrors.Wrap("INTERNAL_ERROR", "更新解析结果失败", 500, err)
 	}
 
 	rs.ParsedContent = text
 	rs.StructuredData = structured
 	rs.Skills = skills
-	rs.Status = "parsed"
+	rs.Status = StatusParsed
 	return rs, nil
 }
 
@@ -221,7 +279,7 @@ func (s *Service) Match(ctx context.Context, resumeID, jobID string) (*MatchResu
 	if rs == nil {
 		return nil, apperrors.ErrNotFound
 	}
-	if rs.Status != "parsed" {
+	if rs.Status != StatusParsed {
 		return nil, apperrors.New("RESUME_NOT_PARSED", "请先解析简历", 400)
 	}
 

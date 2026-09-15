@@ -110,3 +110,11 @@ func (r *Repository) UpdateParseResult(ctx context.Context, id, parsedContent st
 	)
 	return err
 }
+
+// UpdateStatus 仅更新简历状态（排队/解析中/失败等流转）
+func (r *Repository) UpdateStatus(ctx context.Context, id, status string) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE resumes SET status = $2, updated_at = NOW() WHERE id = $1`,
+		id, status)
+	return err
+}

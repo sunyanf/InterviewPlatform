@@ -2,14 +2,21 @@ package report
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
 	"ai-interview-platform/internal/agent"
 	"ai-interview-platform/internal/evaluation"
 	"ai-interview-platform/internal/interview"
+	"ai-interview-platform/internal/task"
 	apperrors "ai-interview-platform/pkg/errors"
 )
+
+// taskEnqueuer 任务入队能力（*task.Repository 实现；测试可替换）
+type taskEnqueuer interface {
+	Enqueue(ctx context.Context, req task.EnqueueRequest) (*task.Task, bool, error)
+}
 
 // Service 报告业务逻辑层
 type Service struct {
@@ -17,18 +24,70 @@ type Service struct {
 	evalRepo      *evaluation.Repository
 	interviewRepo *interview.Repository
 	agent         *agent.Agent
+	tasks         taskEnqueuer
 	log           *slog.Logger
 }
 
 // NewService 创建报告 Service
-func NewService(repo *Repository, evalRepo *evaluation.Repository, interviewRepo *interview.Repository, agentSvc *agent.Agent, log *slog.Logger) *Service {
+func NewService(repo *Repository, evalRepo *evaluation.Repository, interviewRepo *interview.Repository, agentSvc *agent.Agent, tasks taskEnqueuer, log *slog.Logger) *Service {
 	return &Service{
 		repo:          repo,
 		evalRepo:      evalRepo,
 		interviewRepo: interviewRepo,
 		agent:         agentSvc,
+		tasks:         tasks,
 		log:           log,
 	}
+}
+
+// RequestGenerate 提交报告生成异步任务（会话归属/状态/评估前置校验 + 幂等入队）
+func (s *Service) RequestGenerate(ctx context.Context, userID, sessionID string) (*task.AcceptedView, error) {
+	sess, err := s.interviewRepo.GetByID(ctx, sessionID)
+	if err != nil {
+		s.log.Error("get session failed", "session_id", sessionID, "error", err)
+		return nil, apperrors.Wrap("INTERNAL_ERROR", "查询面试失败", 500, err)
+	}
+	if sess == nil {
+		return nil, apperrors.New("INTERVIEW_SESSION_NOT_FOUND", "面试不存在", 404)
+	}
+	if sess.UserID != userID {
+		return nil, apperrors.ErrForbidden
+	}
+	if sess.Status != interview.StatusCompleted {
+		return nil, apperrors.New("SESSION_NOT_COMPLETED", "面试尚未完成，无法生成报告", 400)
+	}
+
+	eval, err := s.evalRepo.GetBySessionID(ctx, sessionID)
+	if err != nil {
+		s.log.Error("get evaluation failed", "session_id", sessionID, "error", err)
+		return nil, apperrors.Wrap("INTERNAL_ERROR", "查询评估失败", 500, err)
+	}
+	if eval == nil {
+		return nil, apperrors.New("EVALUATION_REQUIRED", "该面试尚未评估，请先完成评估", 404)
+	}
+
+	t, _, err := s.tasks.Enqueue(ctx, task.EnqueueRequest{
+		Type: task.TypeReportGeneration,
+		Payload: task.SessionTaskPayload{
+			UserID:    userID,
+			SessionID: sessionID,
+		},
+		IdempotencyKey: "report_generation:" + sessionID,
+	})
+	if err != nil {
+		return nil, apperrors.Wrap("INTERNAL_ERROR", "创建报告任务失败", 500, err)
+	}
+	return &task.AcceptedView{TaskID: t.ID, Status: t.Status}, nil
+}
+
+// RunGenerateTask worker 任务处理器：解码负载后生成报告（Generate 内部仍做完整校验）
+func (s *Service) RunGenerateTask(ctx context.Context, raw json.RawMessage) error {
+	var p task.SessionTaskPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return fmt.Errorf("decode report_generation payload: %w", err)
+	}
+	_, err := s.Generate(ctx, p.UserID, p.SessionID)
+	return err
 }
 
 // Generate 生成面试报告（显式触发，可重跑覆盖；前置条件：评估已完成）

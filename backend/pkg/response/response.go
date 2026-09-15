@@ -36,6 +36,17 @@ func Created(w http.ResponseWriter, data interface{}) {
 	})
 }
 
+// Accepted 返回已接受响应（异步任务已入队，客户端凭 task_id 轮询）
+func Accepted(w http.ResponseWriter, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(Response{
+		Code:    "ACCEPTED",
+		Message: "accepted",
+		Data:    data,
+	})
+}
+
 // Error 返回错误响应
 func Error(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "application/json")

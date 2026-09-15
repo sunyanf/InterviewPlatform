@@ -95,6 +95,30 @@ adversarial
 edge_cases
 ```
 
+当前数据集位于 `evals/datasets/evaluator/`：
+
+- `golden.jsonl`：22 条人工标注样本（golden + edge_cases：空回答、跑题、偏科、长篇空洞、临界分等），
+  每条含 `expected_dimensions` 与按 Rubric 权重确定性算出的 `expected_total`；
+- `adversarial.jsonl`：17 条契约异常样本（空输出、非 JSON、缺字段、错类型、越界分、markdown 包裹、夹带解释文字等），
+  每条用 `scenario` 引用脚本化 Provider 的固定输出，`expect_valid` 标注业务层应接受还是拒绝。
+
+回归工具 `backend/cmd/evalrunner`：
+
+```bash
+# mock 模式（CI 默认执行）：golden 结构化契约回归 + adversarial 异常回归
+cd backend && go run ./cmd/evalrunner
+
+# 真实 Provider 评分一致性回归（阶段 B 配置密钥后）
+LLM_PROVIDER=openai LLM_API_KEY=... LLM_MODEL=gpt-4o-mini \
+  go run ./cmd/evalrunner -agreement -tolerance 15 -min-agreement 0.8 \
+    -out ../evals/results/evaluator-$(date +%F).json
+```
+
+报告字段：`passed/failed`、失败原因、每维度偏差、`agreement_rate`（容差内通过率）
+与 `mean_abs_error`。退出码：契约失败或一致率低于阈值返回非 0。
+mock 输出与答案质量无关，`-agreement` 在 mock 下会被忽略。Go 层回归测试见
+`backend/internal/evalrun/evalrun_test.go`，CI 已接入。
+
 ---
 
 # 6. AI 输出质量指标

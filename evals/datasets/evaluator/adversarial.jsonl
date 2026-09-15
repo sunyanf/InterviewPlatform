@@ -1,0 +1,17 @@
+{"case_id":"adv-001","dataset":"adversarial","description":"正常完整输出","scenario":"valid_basic","expect_valid":true}
+{"case_id":"adv-002","dataset":"adversarial","description":"四维度全部 0 分的合法输出","scenario":"all_zero","expect_valid":true}
+{"case_id":"adv-003","dataset":"adversarial","description":"四维度全部 100 分的合法输出","scenario":"all_one_hundred","expect_valid":true}
+{"case_id":"adv-004","dataset":"adversarial","description":"markdown 代码块包裹的 JSON（真实模型常见）","scenario":"fenced_json","expect_valid":true}
+{"case_id":"adv-005","dataset":"adversarial","description":"空字符串输出（模型超时/空响应）","scenario":"empty_string","expect_valid":false}
+{"case_id":"adv-006","dataset":"adversarial","description":"纯自然语言、非 JSON 输出","scenario":"plain_text","expect_valid":false}
+{"case_id":"adv-007","dataset":"adversarial","description":"空对象（缺全部维度）","scenario":"empty_object","expect_valid":false}
+{"case_id":"adv-008","dataset":"adversarial","description":"缺少一个必需维度","scenario":"missing_dimension","expect_valid":false}
+{"case_id":"adv-009","dataset":"adversarial","description":"维度分为字符串（类型错误）","scenario":"string_score","expect_valid":false}
+{"case_id":"adv-010","dataset":"adversarial","description":"分数越界（应被 clamp 归一化后接受）","scenario":"out_of_range","expect_valid":true}
+{"case_id":"adv-011","dataset":"adversarial","description":"未知维度（应被白名单剔除后接受）","scenario":"unknown_dimensions","expect_valid":true}
+{"case_id":"adv-012","dataset":"adversarial","description":"evidence/recommendations 为空数组（契约允许）","scenario":"empty_collections","expect_valid":true}
+{"case_id":"adv-013","dataset":"adversarial","description":"字面量 null（解析后零值，缺维度）","scenario":"null_literal","expect_valid":false}
+{"case_id":"adv-014","dataset":"adversarial","description":"小数分数（应四舍五入后接受）","scenario":"decimal_scores","expect_valid":true}
+{"case_id":"adv-015","dataset":"adversarial","description":"evidence 中文本为空的非法项应被剔除","scenario":"blank_evidence_items","expect_valid":true}
+{"case_id":"adv-016","dataset":"adversarial","description":"JSON 前后夹带解释文字（当前 cleanJSON 不处理，应拒绝）","scenario":"json_with_prose","expect_valid":false}
+{"case_id":"adv-017","dataset":"adversarial","description":"维度对象为 null（全部缺失）","scenario":"null_dimensions","expect_valid":false}

@@ -41,3 +41,7 @@ jobs:
 
       - name: Test
         run: go test -race -cover ./...
+
+      - name: Evaluator eval regression (golden contract + adversarial)
+        run: go run ./cmd/evalrunner
+

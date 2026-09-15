@@ -296,6 +296,19 @@ GET  /api/v1/answers/:questionID/audio             查询语音详情（含指�
 
 错误语义：跨用户 403；会话非 RUNNING 上传 400 `SESSION_NOT_RUNNING`；格式不支持 400 `INVALID_FORMAT`；未上传 404 `AUDIO_NOT_FOUND`；未转写先分析 400 `NOT_TRANSCRIBED`；转写为空 400 `ASR_EMPTY_TRANSCRIPT`。
 
+前端语音作答链路（`interview/VoiceRecorder.tsx`）：
+
+```text
+MediaRecorder（webm/opus，Safari 回退 mp4）
+  → POST /answers/{id}/audio（file + duration_ms）
+  → POST /answers/{id}/audio/transcribe
+  → 转写文本回填回答输入框（候选人可修改）
+  → 随文字答案一起 POST /interviews/{id}/answer
+```
+
+录音仅用于生成文字答案，提交的仍以文本为准（语音不是最终事实）；
+麦克风权限被拒/无设备时展示明确提示，不阻断文字作答。
+
 语音量化指标由业务代码确定性计算（语速 = 有效字符/分钟，口头禅计数）；
 表达分析（`audio.speech_analyzer.v1`）只产定性建议，不计算分数；日志不输出音频与转写内容（AGENTS.md #17）。
 

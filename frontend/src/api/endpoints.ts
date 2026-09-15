@@ -1,5 +1,6 @@
 import { api, uploadFile } from './client'
 import type {
+  AudioAnswer,
   Category,
   CreateSessionRequest,
   Evaluation,
@@ -79,4 +80,20 @@ export const reportApi = {
 
 export const taskApi = {
   get: (taskId: string) => api.get<TaskInfo>(`/tasks/${encodeURIComponent(taskId)}`),
+}
+
+export const audioApi = {
+  // 上传答题录音（multipart：file + duration_ms）
+  upload: (questionId: string, file: File, durationMs: number) =>
+    uploadFile<AudioAnswer>(
+      `/answers/${encodeURIComponent(questionId)}/audio`,
+      'file',
+      file,
+      { duration_ms: String(durationMs) },
+    ),
+  // 触发 ASR 转写，返回含 transcript 的音频记录
+  transcribe: (questionId: string) =>
+    api.post<AudioAnswer>(
+      `/answers/${encodeURIComponent(questionId)}/audio/transcribe`,
+    ),
 }

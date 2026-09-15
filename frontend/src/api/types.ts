@@ -262,6 +262,23 @@ export interface SpeechResult {
   download_expire_seconds: number
 }
 
+// ---------- voice answer ----------
+export interface AudioAnswer {
+  id: string
+  session_id: string
+  question_id: string
+  object_key: string
+  format: string
+  size_bytes: number
+  duration_ms: number
+  transcript: string
+  language: string
+  status: string
+  asr_provider: string
+  created_at: string
+  updated_at: string
+}
+
 // ---------- async task ----------
 export interface TaskAccepted {
   task_id: string

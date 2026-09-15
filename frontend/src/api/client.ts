@@ -115,9 +115,16 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
 }
 
 // uploadFile 处理 multipart/form-data（不带 JSON Content-Type，浏览器自动加 boundary）
-export async function uploadFile<T>(path: string, field: string, file: File): Promise<T> {
+// extra 用于附加 duration_ms 等普通表单字段
+export async function uploadFile<T>(
+  path: string,
+  field: string,
+  file: File,
+  extra: Record<string, string> = {},
+): Promise<T> {
   const form = new FormData()
   form.append(field, file)
+  Object.entries(extra).forEach(([k, v]) => form.append(k, v))
   const doUpload = (accessToken: string | null) =>
     fetch(`/api/v1${path}`, {
       method: 'POST',

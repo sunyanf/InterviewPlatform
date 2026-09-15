@@ -5,6 +5,7 @@ import type { AnswerAnalysis, Question } from '../api/types'
 import { useInterviewSocket } from '../ws/useInterviewSocket'
 import { QTYPE_LABEL } from '../lib/display'
 import { ChatPanel } from '../interview/ChatPanel'
+import { VoiceRecorder } from '../interview/VoiceRecorder'
 
 export default function InterviewPage() {
   const { id = '' } = useParams()
@@ -226,6 +227,15 @@ function QuestionStage({
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
+          <div style={{ marginTop: 12 }}>
+            <VoiceRecorder
+              questionId={question.id}
+              disabled={busy}
+              onTranscript={(t) =>
+                setText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${t}` : t))
+              }
+            />
+          </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
             <span className="dim mono" style={{ fontSize: 12 }}>
               {text.trim().length} 字

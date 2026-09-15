@@ -407,7 +407,13 @@ func (a evaluationKnowledge) RetrieveForEvaluation(ctx context.Context, query st
 
 // Start 启动服务器（含异步任务 worker 与限流清理）
 func (s *Server) Start(baseCtx context.Context) error {
-	s.runner.Start(baseCtx)
+	// 多副本部署时通过 TASK_ENABLED=false 将实例作为纯 API 节点；
+	// 整个部署至少要有一个实例启用 worker，否则异步任务无人领取
+	if s.cfg.Task.Enabled {
+		s.runner.Start(baseCtx)
+	} else {
+		s.log.Info("task worker disabled (TASK_ENABLED=false), serving HTTP only")
+	}
 	if s.authLimit != nil {
 		s.authLimit.Start(baseCtx)
 	}

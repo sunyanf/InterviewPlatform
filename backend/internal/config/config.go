@@ -119,6 +119,7 @@ type LogConfig struct {
 
 // TaskConfig 异步任务 worker 参数
 type TaskConfig struct {
+	Enabled         bool          // 是否在本进程启动 worker（多副本部署时仅部分实例开启，至少一个）
 	Workers         int           // 并发 worker 数
 	PollInterval    time.Duration // 空队列轮询间隔
 	LeaseTimeout    time.Duration // 单任务执行租约
@@ -211,6 +212,7 @@ func Load() (*Config, error) {
 			Format: getEnv("LOG_FORMAT", "json"),
 		},
 		Task: TaskConfig{
+			Enabled:         getEnvBool("TASK_ENABLED", true),
 			Workers:         getEnvInt("TASK_WORKERS", 2),
 			PollInterval:    getEnvDuration("TASK_POLL_INTERVAL", 2*time.Second),
 			LeaseTimeout:    getEnvDuration("TASK_LEASE_TIMEOUT", 5*time.Minute),

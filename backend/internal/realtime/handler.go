@@ -224,6 +224,15 @@ func (h *Handler) handleAnswer(ctx context.Context, c *Client, sess *interview.S
 		if !c.sendFrame(marshalEvent(typeAnalysis, res.Analysis)) {
 			return false
 		}
+	} else {
+		// 分析超时/失败时必须显式通知客户端结束“分析中”状态，
+		// 否则重连/慢调用场景下前端会永久转圈
+		if !c.sendFrame(marshalEvent(typeAnalysisSkipped, AnalysisSkippedData{
+			AnswerID:   res.Answer.ID,
+			QuestionID: res.Answer.QuestionID,
+		})) {
+			return false
+		}
 	}
 	if res.FollowUp != nil {
 		if !c.sendFrame(marshalEvent(typeFollowUp, res.FollowUp)) {

@@ -312,6 +312,11 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID, sessionID string, re
 		return nil, err
 	}
 
+	// 鉴权与归属校验通过后，整条“落库 → 分析 → 追问”链路脱离 WS/HTTP 连接取消：
+	// 候选人已发出的回答不能因断线/连接被新标签页顶掉而丢失。用总超时兜底防泄漏。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), submitAnswerTotalTimeout)
+	defer cancel()
+
 	// 只有进行中的会话才能回答
 	if sess.Status != StatusRunning {
 		return nil, apperrors.New("INVALID_STATE_TRANSITION",
@@ -348,29 +353,32 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID, sessionID string, re
 		return nil, apperrors.Wrap("INTERNAL_ERROR", "保存回答失败", 500, err)
 	}
 
-	// Agent 回答分析（尽力而为：回答已保存，分析失败/超时不阻塞提交）
-	// 单独加超时，避免模型长时间无响应时拖住整条提交流程
+	// Agent 回答分析（尽力而为：回答已保存，分析失败/超时不阻塞提交）。
+	// 关键：分析在回答落库后进行，属于可独立完成的后台工作——不能随 WS/HTTP 连接
+	// 断开而取消（否则断线重连后回答永远没有分析）。WithoutCancel 脱离请求取消，
+	// 仅受显式超时约束。
 	var analysis *agent.AnswerAnalysis
-	analyzeCtx, analyzeCancel := context.WithTimeout(ctx, analyzeAnswerTimeout)
+	analyzeCtx, analyzeCancel := context.WithTimeout(context.WithoutCancel(ctx), analyzeAnswerTimeout)
+	defer analyzeCancel()
 	analysis, err = s.agent.AnalyzeAnswer(analyzeCtx, agent.AnalyzeAnswerInput{
 		Question:       q.Question,
 		ExpectedPoints: q.ExpectedPoints,
 		AnswerText:     req.TextContent,
 		Difficulty:     q.Difficulty,
 	})
-	analyzeCancel()
 	if err != nil {
 		metrics.AgentFailures.Inc("analyze_answer")
 		s.log.Warn("analyze answer failed", "session_id", sess.ID, "question_id", q.ID, "error", err)
-	} else if err := s.repo.UpdateAnswerAnalysis(ctx, answer.ID, analysis); err != nil {
+	} else if err := s.repo.UpdateAnswerAnalysis(analyzeCtx, answer.ID, analysis); err != nil {
 		s.log.Warn("update answer analysis failed", "answer_id", answer.ID, "error", err)
 	}
 	answer.Analysis = analysis
 
 	// Agent 追问决策（仅普通问题可追问，避免追问链无限延伸）
+	// 同样脱离连接取消：决策过程中连接断开不应留下半截答题状态
 	var followUp *Question
 	if analysis != nil && q.QuestionType != QTypeFollowUp {
-		followUpCtx, followUpCancel := context.WithTimeout(ctx, decideFollowUpTimeout)
+		followUpCtx, followUpCancel := context.WithTimeout(context.WithoutCancel(ctx), decideFollowUpTimeout)
 		decision, err := s.agent.DecideFollowUp(followUpCtx, agent.FollowUpInput{
 			Question:       q.Question,
 			ExpectedPoints: q.ExpectedPoints,

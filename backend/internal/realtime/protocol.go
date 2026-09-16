@@ -10,15 +10,16 @@ const (
 	typePing   = "ping"   // 客户端心跳
 
 	// S→C
-	typeSnapshot    = "snapshot"     // 连接/重连全量状态
-	typeAnswerSaved = "answer_saved" // 回答已持久化
-	typeAnalysis    = "analysis"     // 回答分析完成
-	typeFollowUp    = "follow_up"    // 产生追问问题
-	typeChatDelta   = "chat_delta"   // 实时对话增量
-	typeChatDone    = "chat_done"    // 实时对话结束
-	typeChatSpeech  = "chat_speech"  // 实时对话回复的语音合成结果（请求 tts=true 时在 chat_done 前下发）
-	typePong        = "pong"
-	typeError       = "error"
+	typeSnapshot        = "snapshot"         // 连接/重连全量状态
+	typeAnswerSaved     = "answer_saved"     // 回答已持久化
+	typeAnalysis        = "analysis"         // 回答分析完成
+	typeAnalysisSkipped = "analysis_skipped" // 分析服务超时/失败，回答已记录但本轮无分析
+	typeFollowUp        = "follow_up"        // 产生追问问题
+	typeChatDelta       = "chat_delta"       // 实时对话增量
+	typeChatDone        = "chat_done"        // 实时对话结束
+	typeChatSpeech      = "chat_speech"      // 实时对话回复的语音合成结果（请求 tts=true 时在 chat_done 前下发）
+	typePong            = "pong"
+	typeError           = "error"
 )
 
 // Envelope WebSocket 消息信封
@@ -52,6 +53,12 @@ type ChatMessage struct {
 type ErrorData struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// AnalysisSkippedData S→C 分析降级（回答已保存，但分析超时/失败）
+type AnalysisSkippedData struct {
+	AnswerID   string `json:"answer_id"`
+	QuestionID string `json:"question_id"`
 }
 
 // ChatDeltaData S→C 对话增量

@@ -30,6 +30,9 @@ const (
 const (
 	analyzeAnswerTimeout  = 30 * time.Second
 	decideFollowUpTimeout = 20 * time.Second
+	// submitAnswerTotalTimeout 覆盖落库+分析+追问整条后台链路；
+	// 链路脱离 WS/HTTP 连接取消，但必须有总时限，避免异常时 goroutine 泄漏
+	submitAnswerTotalTimeout = 70 * time.Second
 )
 
 // SessionConfig 面试配置

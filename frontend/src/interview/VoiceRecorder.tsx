@@ -1,10 +1,54 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
 import { audioApi } from '../api/endpoints'
 
 type Phase = 'idle' | 'recording' | 'processing'
 
-// 候选编码：优先 webm/opus（Chrome/Edge/Firefox），Safari 退回 mp4
+// ---------- Web Speech API（Chrome/Edge 内置实时语音识别）类型 ----------
+interface SRAlternative {
+  transcript: string
+}
+interface SRResult {
+  isFinal: boolean
+  0: SRAlternative
+}
+interface SRResultList {
+  length: number
+  [index: number]: SRResult
+}
+interface SREvent {
+  resultIndex: number
+  results: SRResultList
+}
+interface SRErrorEvent {
+  error: string
+}
+interface SRecognition {
+  lang: string
+  continuous: boolean
+  interimResults: boolean
+  onresult: ((e: SREvent) => void) | null
+  onerror: ((e: SRErrorEvent) => void) | null
+  onend: (() => void) | null
+  start(): void
+  stop(): void
+  abort(): void
+}
+type SRCtor = new () => SRecognition
+
+declare global {
+  interface Window {
+    SpeechRecognition?: SRCtor
+    webkitSpeechRecognition?: SRCtor
+  }
+}
+
+function getSpeechRecognitionCtor(): SRCtor | null {
+  if (typeof window === 'undefined') return null
+  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null
+}
+
+// ---------- MediaRecorder 回退链路用到的编码探测 ----------
 const MIME_CANDIDATES: { mime: string; ext: string }[] = [
   { mime: 'audio/webm;codecs=opus', ext: 'webm' },
   { mime: 'audio/webm', ext: 'webm' },
@@ -17,7 +61,7 @@ function pickMime(): { mime: string; ext: string } | null {
   for (const c of MIME_CANDIDATES) {
     if (MediaRecorder.isTypeSupported(c.mime)) return c
   }
-  return { mime: '', ext: 'webm' } // 交给浏览器默认编码
+  return { mime: '', ext: 'webm' }
 }
 
 function formatDuration(ms: number): string {
@@ -27,7 +71,9 @@ function formatDuration(ms: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
-// VoiceRecorder 录制答题语音：MediaRecorder → 上传 → ASR 转写 → 回填文本。
+// VoiceRecorder 录制答题语音。
+// 优先使用浏览器原生 Web Speech API 实时识别（中文，停止即回填，无需后端 ASR key）；
+// 浏览器不支持时回退 MediaRecorder 上传 → 后端转写链路。
 // 转写文本进入回答输入框，候选人可在提交前检查/修改（语音不是最终事实）。
 export function VoiceRecorder({
   questionId,
@@ -41,6 +87,7 @@ export function VoiceRecorder({
   const [phase, setPhase] = useState<Phase>('idle')
   const [elapsedMs, setElapsedMs] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [interim, setInterim] = useState('')
 
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -49,20 +96,47 @@ export function VoiceRecorder({
   const startedAtRef = useRef(0)
   const tickRef = useRef<number | null>(null)
 
-  const supported = typeof navigator !== 'undefined' && !!navigator.mediaDevices && pickMime() !== null
+  // 浏览器原生识别相关
+  const recognitionRef = useRef<SRecognition | null>(null)
+  const finalTextRef = useRef('')
+  const userStoppedRef = useRef(false)
+  const unmountedRef = useRef(false)
 
-  const cleanupStream = () => {
-    streamRef.current?.getTracks().forEach((t) => t.stop())
-    streamRef.current = null
+  const SRTor = useMemo(() => getSpeechRecognitionCtor(), [])
+  const useBrowserASR = SRTor !== null
+  const mediaRecorderSupported =
+    typeof navigator !== 'undefined' && !!navigator.mediaDevices && pickMime() !== null
+  const supported = useBrowserASR || mediaRecorderSupported
+
+  const stopTick = () => {
     if (tickRef.current) {
       window.clearInterval(tickRef.current)
       tickRef.current = null
     }
   }
 
-  // 卸载/切题时释放麦克风
+  const cleanupStream = () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
+    stopTick()
+  }
+
+  // 卸载/切题时释放麦克风与识别器
   useEffect(() => {
+    unmountedRef.current = false
     return () => {
+      unmountedRef.current = true
+      if (recognitionRef.current) {
+        recognitionRef.current.onresult = null
+        recognitionRef.current.onerror = null
+        recognitionRef.current.onend = null
+        try {
+          recognitionRef.current.abort()
+        } catch {
+          /* noop */
+        }
+        recognitionRef.current = null
+      }
       if (recorderRef.current && recorderRef.current.state !== 'inactive') {
         recorderRef.current.onstop = null
         try {
@@ -75,7 +149,90 @@ export function VoiceRecorder({
     }
   }, [questionId])
 
-  const start = async () => {
+  // ---------- 路径 A：浏览器原生 Web Speech API ----------
+  const startBrowserASR = () => {
+    if (!SRTor) return
+    setError(null)
+    setInterim('')
+    finalTextRef.current = ''
+    userStoppedRef.current = false
+
+    const recognition = new SRTor()
+    recognition.lang = 'zh-CN'
+    recognition.continuous = true
+    recognition.interimResults = true
+
+    recognition.onresult = (e: SREvent) => {
+      let interimText = ''
+      for (let i = 0; i < e.results.length; i++) {
+        const result = e.results[i]
+        if (result.isFinal) {
+          finalTextRef.current += result[0].transcript
+        } else {
+          interimText += result[0].transcript
+        }
+      }
+      setInterim(interimText)
+    }
+
+    recognition.onerror = (e: SRErrorEvent) => {
+      const name = e.error
+      if (name === 'not-allowed' || name === 'service-not-allowed') {
+        setError('麦克风权限被拒绝，请在浏览器地址栏允许麦克风后重试')
+      } else if (name === 'network') {
+        setError('语音识别服务不可达（浏览器识别需联网，可开启系统代理后重试），请改用文字作答')
+      } else if (name === 'no-speech') {
+        setError('未检测到语音，请重试或改用文字作答')
+      } else if (name === 'audio-capture') {
+        setError('未检测到麦克风设备')
+      } else if (name !== 'aborted') {
+        setError(`语音识别失败（${name}），请改用文字作答`)
+      }
+      userStoppedRef.current = true // onend 不再回填
+      stopTick()
+      setPhase('idle')
+      setInterim('')
+    }
+
+    recognition.onend = () => {
+      stopTick()
+      setInterim('')
+      if (unmountedRef.current) return
+      const text = finalTextRef.current.trim()
+      setPhase('idle')
+      setElapsedMs(0)
+      if (userStoppedRef.current && text) {
+        onTranscript(text)
+      } else if (userStoppedRef.current && !text) {
+        setError('转写结果为空，请改用文字作答或重试')
+      }
+    }
+
+    try {
+      recognition.start()
+      recognitionRef.current = recognition
+      startedAtRef.current = Date.now()
+      setElapsedMs(0)
+      tickRef.current = window.setInterval(() => {
+        setElapsedMs(Date.now() - startedAtRef.current)
+      }, 500)
+      setPhase('recording')
+    } catch {
+      setError('无法启动语音识别，请重试或改用文字作答')
+    }
+  }
+
+  const stopBrowserASR = () => {
+    userStoppedRef.current = true
+    try {
+      recognitionRef.current?.stop()
+    } catch {
+      /* noop */
+    }
+  }
+
+  // ---------- 路径 B：MediaRecorder 上传 → 后端转写（回退） ----------
+  const startUpload = async () => {
     setError(null)
     const mime = pickMime()
     if (!mime) {
@@ -141,11 +298,14 @@ export function VoiceRecorder({
     }
   }
 
-  const stop = () => {
+  const stopUpload = () => {
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
       recorderRef.current.stop()
     }
   }
+
+  const start = useBrowserASR ? startBrowserASR : startUpload
+  const stop = useBrowserASR ? stopBrowserASR : stopUpload
 
   if (!supported) return null
 
@@ -154,54 +314,75 @@ export function VoiceRecorder({
   const processing = phase === 'processing'
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-      {recording ? (
-        <button
-          type="button"
-          className="btn"
-          onClick={stop}
-          style={{ padding: '7px 14px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        {recording ? (
+          <button
+            type="button"
+            className="btn"
+            onClick={stop}
+            style={{ padding: '7px 14px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}
+          >
+            <span
+              style={{
+                width: 9,
+                height: 9,
+                borderRadius: 2,
+                background: 'var(--accent)',
+                display: 'inline-block',
+              }}
+            />
+            停止并转写 {formatDuration(elapsedMs)}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn"
+            onClick={start}
+            disabled={busy || processing}
+            style={{ padding: '7px 14px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}
+            title="用麦克风回答，转写后可在文本框中修改"
+          >
+            {processing ? (
+              <>
+                <span className="spinner" /> 转写中…
+              </>
+            ) : (
+              <>
+                <span style={{ color: 'var(--accent)', fontSize: 14 }}>●</span> 语音作答
+                {useBrowserASR && (
+                  <span className="dim" style={{ fontSize: 11 }}>
+                    实时识别
+                  </span>
+                )}
+              </>
+            )}
+          </button>
+        )}
+        {recording && (
+          <span className="dim" style={{ fontSize: 12 }}>
+            正在录音，回答完点击「停止并转写」
+          </span>
+        )}
+        {error && (
+          <span style={{ fontSize: 12, color: 'var(--accent)' }} title={error}>
+            {error}
+          </span>
+        )}
+      </div>
+      {recording && interim && (
+        <div
+          className="dim"
+          style={{
+            fontSize: 13,
+            padding: '8px 12px',
+            background: 'var(--surface-2, #f7f7f9)',
+            borderRadius: 8,
+            border: '1px dashed var(--line)',
+          }}
         >
-          <span
-            style={{
-              width: 9,
-              height: 9,
-              borderRadius: 2,
-              background: 'var(--accent)',
-              display: 'inline-block',
-            }}
-          />
-          停止并转写 {formatDuration(elapsedMs)}
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="btn"
-          onClick={start}
-          disabled={busy || processing}
-          style={{ padding: '7px 14px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}
-          title="用麦克风回答，转写后可在文本框中修改"
-        >
-          {processing ? (
-            <>
-              <span className="spinner" /> 转写中…
-            </>
-          ) : (
-            <>
-              <span style={{ color: 'var(--accent)', fontSize: 14 }}>●</span> 语音作答
-            </>
-          )}
-        </button>
-      )}
-      {recording && (
-        <span className="dim" style={{ fontSize: 12 }}>
-          正在录音，回答完点击「停止并转写」
-        </span>
-      )}
-      {error && (
-        <span style={{ fontSize: 12, color: 'var(--accent)' }} title={error}>
-          {error}
-        </span>
+          {interim}
+        </div>
       )}
     </div>
   )

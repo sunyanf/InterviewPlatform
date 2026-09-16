@@ -2,6 +2,11 @@ package user
 
 import "time"
 
+const (
+	RoleUser  = "user"
+	RoleAdmin = "admin"
+)
+
 // User 用户模型
 type User struct {
 	ID           string    `json:"id"`
@@ -10,6 +15,7 @@ type User struct {
 	Nickname     string    `json:"nickname"`
 	AvatarURL    string    `json:"avatar_url,omitempty"`
 	Status       string    `json:"status"`
+	Role         string    `json:"role"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }

@@ -14,6 +14,7 @@ import (
 type Claims struct {
 	UserID string `json:"user_id"`
 	Email  string `json:"email"`
+	Role   string `json:"role"`
 	jwt.RegisteredClaims
 }
 
@@ -34,11 +35,12 @@ func NewManager(cfg config.JWTConfig) *Manager {
 }
 
 // Generate 生成 Token
-func (m *Manager) Generate(userID, email string) (string, error) {
+func (m *Manager) Generate(userID, email, role string) (string, error) {
 	now := time.Now()
 	claims := Claims{
 		UserID: userID,
 		Email:  email,
+		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    m.issuer,
 			Subject:   userID,

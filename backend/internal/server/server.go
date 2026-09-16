@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"ai-interview-platform/internal/admin"
 	"ai-interview-platform/internal/agent"
 	"ai-interview-platform/internal/audio"
 	"ai-interview-platform/internal/config"
@@ -25,6 +26,7 @@ import (
 	"ai-interview-platform/internal/realtime"
 	"ai-interview-platform/internal/report"
 	"ai-interview-platform/internal/resume"
+	"ai-interview-platform/internal/settings"
 	"ai-interview-platform/internal/task"
 	ttssvc "ai-interview-platform/internal/tts"
 	"ai-interview-platform/internal/user"
@@ -44,7 +46,7 @@ type Server struct {
 	log          *slog.Logger
 	jwtMgr       *jwt.Manager
 	storage      storage.Storage
-	llm          llm.Provider
+	llm          *llm.SwappableProvider
 	embedder     embedding.Embedder
 	asr          asr.ASR
 	ttsProv      provider.TTS
@@ -57,6 +59,7 @@ type Server struct {
 	apiLimit     *appmiddleware.Limiter
 	agent        *agent.Agent
 	knowledgeSvc *knowledge.Service
+	settingsSvc  *settings.Service
 	http         *http.Server
 }
 
@@ -65,13 +68,16 @@ func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Man
 	// LLM 指标装饰：调用量/延迟/token/估算费用（不改变语义，透传流式能力）
 	llmProv = llm.NewMeteredProvider(llmProv, cfg.LLM.PriceInputPer1K, cfg.LLM.PriceOutputPer1K)
 
+	// SwappableProvider 包装：admin 可通过 API 原子热替换底层 Provider
+	swappable := llm.NewSwappableProvider(llmProv)
+
 	s := &Server{
 		cfg:     cfg,
 		db:      db,
 		log:     log,
 		jwtMgr:  jwtMgr,
 		storage: st,
-		llm:     llmProv,
+		llm:     swappable,
 	}
 
 	// 初始化 Embedding Provider（RAG）
@@ -109,13 +115,20 @@ func New(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, jwtMgr *jwt.Man
 	knowledgeRepo := knowledge.NewRepository(db)
 	s.knowledgeSvc = knowledge.NewService(knowledgeRepo, embedder, log)
 
+	// 配置中心：DB-backed KV，启动时用 env 默认值填充空行
+	settingsRepo := settings.NewRepository(db)
+	s.settingsSvc = settings.NewService(settingsRepo, cfg, log)
+	if err := s.settingsSvc.Load(context.Background()); err != nil {
+		log.Error("load settings failed", "error", err)
+	}
+
 	// 共享的简历 Service（面试模块依赖）
 	resumeRepo := resume.NewRepository(db)
 	jobRepo := job.NewRepository(db)
-	s.resumeSvc = resume.NewService(resumeRepo, st, llmProv, jobRepo, s.taskRepo, log)
+	s.resumeSvc = resume.NewService(resumeRepo, st, s.llm, jobRepo, s.taskRepo, log)
 
 	// 共享的 Agent（AI 编排）
-	s.agent = agent.New(llmProv, log)
+	s.agent = agent.New(s.llm, log)
 
 	// 评估/报告 Service 单例（HTTP 入队与 worker 执行共用）
 	interviewRepo := interview.NewRepository(db)
@@ -276,6 +289,18 @@ func (s *Server) routes() http.Handler {
 			r.Post("/answers/{questionID}/audio/transcribe", s.audioHandler().Transcribe)
 			r.Post("/answers/{questionID}/audio/analyze", s.audioHandler().Analyze)
 			r.Get("/answers/{questionID}/audio", s.audioHandler().Get)
+		})
+
+		// 管理后台路由（admin 角色专用）
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.Auth(s.jwtMgr))
+			r.Use(appmiddleware.RequireAdmin)
+			r.Use(appmiddleware.MaxBody(s.cfg.Security.MaxBodyBytes))
+
+			r.Get("/admin/settings", s.adminHandler().GetSettings)
+			r.Patch("/admin/settings", s.adminHandler().UpdateSettings)
+			r.Get("/admin/users", s.adminHandler().ListUsers)
+			r.Patch("/admin/users/{id}", s.adminHandler().UpdateUser)
 		})
 	})
 
@@ -442,6 +467,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // taskHandler 初始化任务查询 Handler
 func (s *Server) taskHandler() *task.Handler {
 	return task.NewHandler(s.taskRepo)
+}
+
+// adminHandler 初始化管理后台 Handler
+func (s *Server) adminHandler() *admin.Handler {
+	userRepo := user.NewRepository(s.db)
+	return admin.NewHandler(s.settingsSvc, userRepo, s.llm, s.cfg, s.log)
 }
 
 // workerID 生成进程内 worker 标识（锁/日志追踪用）

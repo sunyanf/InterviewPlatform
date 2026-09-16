@@ -14,6 +14,7 @@ type userCtxKey string
 
 const (
 	UserIDKey userCtxKey = "user_id"
+	RoleKey   userCtxKey = "role"
 )
 
 // Auth JWT 鉴权中间件
@@ -38,7 +39,12 @@ func Auth(jwtMgr *jwt.Manager) func(http.Handler) http.Handler {
 				return
 			}
 
+			role := claims.Role
+			if role == "" {
+				role = "user" // 旧 token 兜底
+			}
 			ctx := context.WithValue(r.Context(), UserIDKey, claims.UserID)
+			ctx = context.WithValue(ctx, RoleKey, role)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -50,4 +56,23 @@ func GetUserID(ctx context.Context) string {
 		return id
 	}
 	return ""
+}
+
+// GetUserRole 从上下文中获取当前用户角色
+func GetUserRole(ctx context.Context) string {
+	if role, ok := ctx.Value(RoleKey).(string); ok {
+		return role
+	}
+	return "user"
+}
+
+// RequireAdmin 仅放行 role == "admin" 的请求
+func RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if GetUserRole(r.Context()) != "admin" {
+			response.Error(w, errors.ErrForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

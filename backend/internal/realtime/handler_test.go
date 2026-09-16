@@ -173,7 +173,7 @@ func TestWS_OriginWhitelist(t *testing.T) {
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
-	token, _ := mgr.Generate("u1", "a@b.com")
+	token, _ := mgr.Generate("u1", "a@b.com", "user")
 	url := wsURL(srv, "s1", token)
 
 	// 命中白名单：升级成功
@@ -222,7 +222,7 @@ func TestWS_ForbiddenSession(t *testing.T) {
 	srv, mgr := newTestServer(svc, &fakeAgent{})
 	defer srv.Close()
 
-	token, _ := mgr.Generate("u1", "a@b.com")
+	token, _ := mgr.Generate("u1", "a@b.com", "user")
 	_, resp := dial(t, srv, "s1", token)
 	if resp == nil || resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403, got %v", resp)
@@ -235,7 +235,7 @@ func TestWS_SnapshotPingAnswerChatFlow(t *testing.T) {
 	srv, mgr := newTestServer(svc, ag)
 	defer srv.Close()
 
-	token, _ := mgr.Generate("u1", "a@b.com")
+	token, _ := mgr.Generate("u1", "a@b.com", "user")
 	conn := mustDial(t, srv, "s1", token)
 	defer conn.Close()
 
@@ -301,7 +301,7 @@ func TestWS_AnswerBusinessError(t *testing.T) {
 	srv, mgr := newTestServer(svc, &fakeAgent{})
 	defer srv.Close()
 
-	token, _ := mgr.Generate("u1", "a@b.com")
+	token, _ := mgr.Generate("u1", "a@b.com", "user")
 	conn := mustDial(t, srv, "s1", token)
 	defer conn.Close()
 	if env := readEnvelope(t, conn); env.Type != typeSnapshot {
@@ -326,7 +326,7 @@ func TestWS_ChatRejectsNonRunningSession(t *testing.T) {
 	srv, mgr := newTestServer(&fakeService{sess: sess}, &fakeAgent{})
 	defer srv.Close()
 
-	token, _ := mgr.Generate("u1", "a@b.com")
+	token, _ := mgr.Generate("u1", "a@b.com", "user")
 	conn := mustDial(t, srv, "s1", token)
 	defer conn.Close()
 	readEnvelope(t, conn) // snapshot
@@ -344,7 +344,7 @@ func TestWS_ChatEmptyMessage(t *testing.T) {
 	srv, mgr := newTestServer(&fakeService{sess: runningSession()}, &fakeAgent{})
 	defer srv.Close()
 
-	token, _ := mgr.Generate("u1", "a@b.com")
+	token, _ := mgr.Generate("u1", "a@b.com", "user")
 	conn := mustDial(t, srv, "s1", token)
 	defer conn.Close()
 	readEnvelope(t, conn)
@@ -364,7 +364,7 @@ func TestWS_ReconnectReplacesOldConnection(t *testing.T) {
 	srv, mgr := newTestServer(svc, ag)
 	defer srv.Close()
 
-	token, _ := mgr.Generate("u1", "a@b.com")
+	token, _ := mgr.Generate("u1", "a@b.com", "user")
 
 	connA := mustDial(t, srv, "s1", token)
 	defer connA.Close()
@@ -398,7 +398,7 @@ func TestWS_ChatWithTTS(t *testing.T) {
 	srv, mgr := newTestServerWithSpeech(&fakeService{sess: runningSession()}, ag, sp)
 	defer srv.Close()
 
-	token, _ := mgr.Generate("u1", "a@b.com")
+	token, _ := mgr.Generate("u1", "a@b.com", "user")
 	conn := mustDial(t, srv, "s1", token)
 	defer conn.Close()
 	readEnvelope(t, conn) // snapshot
@@ -445,7 +445,7 @@ func TestWS_ChatTTSUnavailable(t *testing.T) {
 	srv, mgr := newTestServer(&fakeService{sess: runningSession()}, ag)
 	defer srv.Close()
 
-	token, _ := mgr.Generate("u1", "a@b.com")
+	token, _ := mgr.Generate("u1", "a@b.com", "user")
 	conn := mustDial(t, srv, "s1", token)
 	defer conn.Close()
 	readEnvelope(t, conn)
@@ -473,7 +473,7 @@ func TestWS_ChatTTSFailure(t *testing.T) {
 	srv, mgr := newTestServerWithSpeech(&fakeService{sess: runningSession()}, ag, sp)
 	defer srv.Close()
 
-	token, _ := mgr.Generate("u1", "a@b.com")
+	token, _ := mgr.Generate("u1", "a@b.com", "user")
 	conn := mustDial(t, srv, "s1", token)
 	defer conn.Close()
 	readEnvelope(t, conn)

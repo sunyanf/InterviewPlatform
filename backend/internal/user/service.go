@@ -63,6 +63,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest, meta TokenM
 		Email:        req.Email,
 		PasswordHash: string(hash),
 		Nickname:     nickname,
+		Role:         RoleUser,
 	}
 
 	if err := s.repo.Create(ctx, u); err != nil {
@@ -164,7 +165,7 @@ func (s *Service) GetProfile(ctx context.Context, userID string) (*User, error) 
 
 // issueTokens 生成 access + refresh 令牌对并持久化 refresh token 哈希
 func (s *Service) issueTokens(ctx context.Context, u *User, meta TokenMeta) (*LoginResponse, error) {
-	access, err := s.jwtMgr.Generate(u.ID, u.Email)
+	access, err := s.jwtMgr.Generate(u.ID, u.Email, u.Role)
 	if err != nil {
 		return nil, apperrors.Wrap("INTERNAL_ERROR", "生成 Token 失败", 500, err)
 	}

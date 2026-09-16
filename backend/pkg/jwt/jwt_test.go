@@ -14,7 +14,7 @@ func TestGenerateAndParse(t *testing.T) {
 		Issuer:     "test-issuer",
 	})
 
-	token, err := mgr.Generate("user-123", "test@example.com")
+	token, err := mgr.Generate("user-123", "test@example.com", "user")
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -50,7 +50,7 @@ func TestParse_WrongSecret(t *testing.T) {
 	mgr1 := NewManager(config.JWTConfig{Secret: "secret-1", ExpireTime: time.Hour})
 	mgr2 := NewManager(config.JWTConfig{Secret: "secret-2", ExpireTime: time.Hour})
 
-	token, err := mgr1.Generate("user-1", "a@b.com")
+	token, err := mgr1.Generate("user-1", "a@b.com", "user")
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}

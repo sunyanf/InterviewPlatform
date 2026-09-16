@@ -6,7 +6,7 @@ import { useInterviewSocket } from '../ws/useInterviewSocket'
 import { QTYPE_LABEL } from '../lib/display'
 import { ChatPanel } from '../interview/ChatPanel'
 import { VoiceRecorder } from '../interview/VoiceRecorder'
-import { speak, speechSupported, stopSpeaking } from '../interview/speech'
+import { isAutoplayEnabled, speak, speechSupported, stopSpeaking } from '../interview/speech'
 
 export default function InterviewPage() {
   const { id = '' } = useParams()
@@ -28,14 +28,14 @@ export default function InterviewPage() {
     }
   }, [questions, currentId])
 
-  // 拉取开场白文本并用浏览器朗读（失败静默，不影响文字面试）
+  // 拉取开场白文本；用户开启“面试官语音”时自动朗读（失败静默，不影响文字面试）
   useEffect(() => {
     if (session?.status === 'RUNNING' && !openingText) {
       interviewApi
         .openingSpeech(id)
         .then((r) => {
           setOpeningText(r.text)
-          speak(r.text)
+          if (isAutoplayEnabled()) speak(r.text)
         })
         .catch(() => undefined)
     }
@@ -155,7 +155,6 @@ export default function InterviewPage() {
           bubbles={socket.bubbles}
           streaming={socket.streaming}
           disabled={session?.status !== 'RUNNING'}
-          defaultTTS={session?.mode === 'voice'}
           error={error}
           onDismissError={socket.dismissError}
           onSend={socket.sendChat}
@@ -183,17 +182,26 @@ function QuestionStage({
 }) {
   const [text, setText] = useState('')
   const [submitted, setSubmitted] = useState(false)
+  const [slow, setSlow] = useState(false)
   const startedAt = useRef(Date.now())
 
   useEffect(() => {
     setText('')
     setSubmitted(false)
+    setSlow(false)
     startedAt.current = Date.now()
   }, [question?.id])
 
   useEffect(() => {
     if (answered) setSubmitted(true)
   }, [answered])
+
+  // 客户端兜底：提交后 40s 仍未收到落库确认，提示可先继续（后端分析有 30s 超时降级）
+  useEffect(() => {
+    if (!submitted || !busy || analysis) return
+    const timer = window.setTimeout(() => setSlow(true), 40_000)
+    return () => window.clearTimeout(timer)
+  }, [submitted, busy, analysis])
 
   if (!question) {
     return (
@@ -274,9 +282,21 @@ function QuestionStage({
             </p>
           </div>
 
-          {busy && !analysis && (
+          {busy && !analysis && !slow && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }} className="muted">
               <span className="spinner" /> 正在拆解你的论点与知识缺口…
+            </div>
+          )}
+
+          {busy && !analysis && slow && (
+            <div className="dim" style={{ fontSize: 13 }}>
+              分析服务响应较慢，你的回答已提交，可以先从左侧选择其他题目继续作答，分析结果稍后自动出现。
+            </div>
+          )}
+
+          {!busy && !analysis && question.answer && (
+            <div className="dim" style={{ fontSize: 13 }}>
+              本轮分析服务繁忙或超时，回答已记录，可继续作答其他题目。
             </div>
           )}
 

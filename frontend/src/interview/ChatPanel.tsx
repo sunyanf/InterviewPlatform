@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatBubble } from '../ws/useInterviewSocket'
-import { speak, speechSupported } from './speech'
+import { speak, speechSupported, stopSpeaking, useSpeaking, useInterviewerVoice } from './speech'
 
 export function ChatPanel({
   bubbles,
   streaming,
   disabled,
-  defaultTTS,
   error,
   onDismissError,
   onSend,
@@ -14,18 +13,15 @@ export function ChatPanel({
   bubbles: ChatBubble[]
   streaming: string
   disabled: boolean
-  defaultTTS: boolean
   error: string | null
   onDismissError: () => void
   onSend: (message: string, withTTS: boolean) => void
 }) {
   const [draft, setDraft] = useState('')
-  const [withTTS, setWithTTS] = useState(defaultTTS)
+  const [voiceOn, setVoiceOn] = useInterviewerVoice()
+  const speaking = useSpeaking()
   const scrollRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    setWithTTS(defaultTTS)
-  }, [defaultTTS])
+  const replying = !!streaming
 
   // 新消息/流式增量时滚到底部
   useEffect(() => {
@@ -35,8 +31,8 @@ export function ChatPanel({
 
   const send = () => {
     const text = draft.trim()
-    if (!text || disabled) return
-    onSend(text, withTTS)
+    if (!text || disabled || replying) return
+    onSend(text, voiceOn)
     setDraft('')
   }
 
@@ -55,6 +51,41 @@ export function ChatPanel({
           FREE TALK
         </span>
         <span className="muted" style={{ fontSize: 12.5 }}>和考官自由追问</span>
+        {speechSupported() && (
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+            {speaking && (
+              <button
+                type="button"
+                onClick={stopSpeaking}
+                title="立即停止面试官朗读"
+                style={{
+                  border: '1px solid var(--accent)',
+                  background: 'transparent',
+                  color: 'var(--accent)',
+                  borderRadius: 6,
+                  padding: '2px 10px',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                ■ 停止朗读
+              </button>
+            )}
+            <label
+              className="dim"
+              style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
+              title="关闭后面试官只用文字回复，不会自动说话"
+            >
+              <input
+                type="checkbox"
+                checked={voiceOn}
+                onChange={(e) => setVoiceOn(e.target.checked)}
+                style={{ accentColor: 'var(--accent)' }}
+              />
+              面试官语音
+            </label>
+          </div>
+        )}
       </div>
 
       <div className="iv-chat-scroll" ref={scrollRef}>
@@ -120,23 +151,14 @@ export function ChatPanel({
           }}
         />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
-          <label
-            className="dim"
-            style={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
-          >
-            <input
-              type="checkbox"
-              checked={withTTS}
-              onChange={(e) => setWithTTS(e.target.checked)}
-              style={{ accentColor: 'var(--accent)' }}
-            />
-            语音回复
-          </label>
+          <span className="dim" style={{ fontSize: 12 }}>
+            {replying ? '考官正在回复…' : 'Enter 发送，Shift+Enter 换行'}
+          </span>
           <button
             className="btn btn-primary"
             style={{ padding: '7px 18px', fontSize: 13.5 }}
             onClick={send}
-            disabled={disabled || !draft.trim()}
+            disabled={disabled || replying || !draft.trim()}
           >
             发送
           </button>

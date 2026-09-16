@@ -71,6 +71,11 @@ function formatDuration(ms: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
+// 单次识别最长时长（到点自动收尾，避免识别器异常时无限占用麦克风）
+const MAX_RECORD_MS = 180_000
+// 点击停止后等待识别器收尾的最长时间，超时强制 abort 并提交已有文本
+const STOP_WATCHDOG_MS = 1500
+
 // VoiceRecorder 录制答题语音。
 // 优先使用浏览器原生 Web Speech API 实时识别（中文，停止即回填，无需后端 ASR key）；
 // 浏览器不支持时回退 MediaRecorder 上传 → 后端转写链路。
@@ -99,8 +104,14 @@ export function VoiceRecorder({
   // 浏览器原生识别相关
   const recognitionRef = useRef<SRecognition | null>(null)
   const finalTextRef = useRef('')
+  const interimRef = useRef('')
   const userStoppedRef = useRef(false)
+  const finishedRef = useRef(false) // 保证一次识别只收尾一次
   const unmountedRef = useRef(false)
+  const maxTimerRef = useRef<number | null>(null)
+  const watchdogRef = useRef<number | null>(null)
+  const onTranscriptRef = useRef(onTranscript)
+  onTranscriptRef.current = onTranscript
 
   const SRTor = useMemo(() => getSpeechRecognitionCtor(), [])
   const useBrowserASR = SRTor !== null
@@ -126,6 +137,8 @@ export function VoiceRecorder({
     unmountedRef.current = false
     return () => {
       unmountedRef.current = true
+      if (maxTimerRef.current) window.clearTimeout(maxTimerRef.current)
+      if (watchdogRef.current) window.clearTimeout(watchdogRef.current)
       if (recognitionRef.current) {
         recognitionRef.current.onresult = null
         recognitionRef.current.onerror = null
@@ -150,12 +163,47 @@ export function VoiceRecorder({
   }, [questionId])
 
   // ---------- 路径 A：浏览器原生 Web Speech API ----------
+  // 收尾：停止计时/定时器，提交 final+interim 合并文本；幂等
+  const finishBrowserASR = (reason: 'manual' | 'auto' | 'error', errorMsg?: string) => {
+    if (finishedRef.current) return
+    finishedRef.current = true
+    stopTick()
+    if (maxTimerRef.current) {
+      window.clearTimeout(maxTimerRef.current)
+      maxTimerRef.current = null
+    }
+    if (watchdogRef.current) {
+      window.clearTimeout(watchdogRef.current)
+      watchdogRef.current = null
+    }
+    const recognition = recognitionRef.current
+    if (recognition) {
+      recognition.onresult = null
+      recognition.onerror = null
+      recognition.onend = null
+      recognitionRef.current = null
+    }
+    const text = (finalTextRef.current + interimRef.current).trim()
+    interimRef.current = ''
+    setInterim('')
+    setPhase('idle')
+    setElapsedMs(0)
+    if (unmountedRef.current) return
+    if (text) {
+      onTranscriptRef.current(text)
+    } else if (reason !== 'auto') {
+      setError(errorMsg ?? '转写结果为空，请改用文字作答或重试')
+    }
+  }
+
   const startBrowserASR = () => {
     if (!SRTor) return
     setError(null)
     setInterim('')
     finalTextRef.current = ''
+    interimRef.current = ''
     userStoppedRef.current = false
+    finishedRef.current = false
 
     const recognition = new SRTor()
     recognition.lang = 'zh-CN'
@@ -172,40 +220,35 @@ export function VoiceRecorder({
           interimText += result[0].transcript
         }
       }
+      interimRef.current = interimText
       setInterim(interimText)
     }
 
     recognition.onerror = (e: SRErrorEvent) => {
       const name = e.error
-      if (name === 'not-allowed' || name === 'service-not-allowed') {
-        setError('麦克风权限被拒绝，请在浏览器地址栏允许麦克风后重试')
-      } else if (name === 'network') {
-        setError('语音识别服务不可达（浏览器识别需联网，可开启系统代理后重试），请改用文字作答')
-      } else if (name === 'no-speech') {
-        setError('未检测到语音，请重试或改用文字作答')
-      } else if (name === 'audio-capture') {
-        setError('未检测到麦克风设备')
-      } else if (name !== 'aborted') {
-        setError(`语音识别失败（${name}），请改用文字作答`)
+      // 已经识别到内容（final 或 interim）时，任何错误都先保住文本，不当空结果处理
+      const hasText = !!(finalTextRef.current + interimRef.current).trim()
+      if (hasText) {
+        userStoppedRef.current = true
+        finishBrowserASR('error')
+        return
       }
-      userStoppedRef.current = true // onend 不再回填
-      stopTick()
-      setPhase('idle')
-      setInterim('')
+      if (name === 'not-allowed' || name === 'service-not-allowed') {
+        finishBrowserASR('error', '麦克风权限被拒绝，请在浏览器地址栏允许麦克风后重试')
+      } else if (name === 'network') {
+        finishBrowserASR('error', '语音识别服务不可达（需联网，可开启系统代理后重试），请改用文字作答')
+      } else if (name === 'no-speech' || name === 'audio-capture') {
+        finishBrowserASR('error', '未检测到语音，请靠近麦克风重试，或改用文字作答')
+      } else if (name === 'aborted' || name === 'canceled') {
+        finishBrowserASR('auto')
+      } else {
+        finishBrowserASR('error', `语音识别失败（${name}），请改用文字作答`)
+      }
     }
 
     recognition.onend = () => {
-      stopTick()
-      setInterim('')
-      if (unmountedRef.current) return
-      const text = finalTextRef.current.trim()
-      setPhase('idle')
-      setElapsedMs(0)
-      if (userStoppedRef.current && text) {
-        onTranscript(text)
-      } else if (userStoppedRef.current && !text) {
-        setError('转写结果为空，请改用文字作答或重试')
-      }
+      // 识别器自行结束（静默断句等）：有文本就提交，无文本不报错（用户可再次点击）
+      finishBrowserASR(userStoppedRef.current ? 'manual' : 'auto')
     }
 
     try {
@@ -216,6 +259,11 @@ export function VoiceRecorder({
       tickRef.current = window.setInterval(() => {
         setElapsedMs(Date.now() - startedAtRef.current)
       }, 500)
+      // 兜底：到达最长时长自动收尾
+      maxTimerRef.current = window.setTimeout(() => {
+        userStoppedRef.current = true
+        stopBrowserASR()
+      }, MAX_RECORD_MS)
       setPhase('recording')
     } catch {
       setError('无法启动语音识别，请重试或改用文字作答')
@@ -223,12 +271,24 @@ export function VoiceRecorder({
   }
 
   const stopBrowserASR = () => {
+    if (finishedRef.current) return
     userStoppedRef.current = true
+    const recognition = recognitionRef.current
     try {
-      recognitionRef.current?.stop()
+      recognition?.stop()
     } catch {
       /* noop */
     }
+    // 识别服务异常时 stop() 可能不触发 onend（表现为“点停止没反应”），
+    // 1.5s 后强制 abort 并立即提交已有的 final/interim 文本
+    watchdogRef.current = window.setTimeout(() => {
+      try {
+        recognition?.abort()
+      } catch {
+        /* noop */
+      }
+      finishBrowserASR('manual')
+    }, STOP_WATCHDOG_MS)
   }
 
   // ---------- 路径 B：MediaRecorder 上传 → 后端转写（回退） ----------

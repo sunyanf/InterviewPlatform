@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { tokenStore } from '../api/client'
 import type { Answer, AnswerAnalysis, InterviewSession, Question } from '../api/types'
-import { speak } from '../interview/speech'
+import { isAutoplayEnabled, speak } from '../interview/speech'
 
 // WS 事件信封
 interface Envelope<T = unknown> {
@@ -96,6 +96,8 @@ export function useInterviewSocket(sessionId: string) {
     manualCloseRef.current = false
     let pingTimer: ReturnType<typeof setInterval>
     let reconnectTimer: ReturnType<typeof setTimeout>
+    let statusTimer: ReturnType<typeof setTimeout>
+    let everOpened = false
 
     const connect = () => {
       const token = tokenStore.get()
@@ -107,15 +109,20 @@ export function useInterviewSocket(sessionId: string) {
       const url = `${proto}://${location.host}/api/v1/interviews/${sessionId}/ws?token=${encodeURIComponent(token)}`
       const ws = new WebSocket(url)
       wsRef.current = ws
-      setState((s) => ({ ...s, status: 'connecting' }))
+      // 首次连接立即显示“连接中”；断线重连给 500ms 宽限，瞬断不闪黄
+      if (!everOpened) setState((s) => ({ ...s, status: 'connecting' }))
 
       ws.onopen = () => {
+        if (wsRef.current !== ws) return // 严格模式/快速重连下的陈旧连接
+        everOpened = true
         retryRef.current = 0
+        clearTimeout(statusTimer)
         setState((s) => ({ ...s, status: 'open', error: null }))
         pingTimer = setInterval(() => send('ping', {}), 30_000)
       }
 
       ws.onmessage = (ev) => {
+        if (wsRef.current !== ws) return
         const env = JSON.parse(ev.data as string) as Envelope
         switch (env.type) {
           case 'snapshot': {
@@ -191,8 +198,8 @@ export function useInterviewSocket(sessionId: string) {
                   { id: nextId(), role: 'interviewer', text, speechUrl: url },
                 ],
               }))
-              // 用户请求了语音（后端返回 speech url）时，用浏览器朗读真实回复
-              if (url) speak(text)
+              // 用户请求了语音（后端返回 speech url）且未静音时，浏览器朗读真实回复
+              if (url && isAutoplayEnabled()) speak(text)
             } else {
               setState((s) => ({ ...s, streaming: '' }))
             }
@@ -211,6 +218,7 @@ export function useInterviewSocket(sessionId: string) {
       }
 
       ws.onclose = () => {
+        if (wsRef.current !== ws) return // 已被新连接取代，事件忽略
         clearInterval(pingTimer)
         if (manualCloseRef.current) {
           setState((s) => ({ ...s, status: 'closed' }))
@@ -219,11 +227,16 @@ export function useInterviewSocket(sessionId: string) {
         // 指数退避重连（1s → 16s 封顶）；重连后 snapshot 全量恢复 UI
         const delay = Math.min(1000 * 2 ** retryRef.current, 16_000)
         retryRef.current += 1
-        setState((s) => ({ ...s, status: 'connecting' }))
+        // 曾成功连接过：延迟 500ms 再提示“重连中”，快速重连成功时用户无感知
+        clearTimeout(statusTimer)
+        statusTimer = setTimeout(() => {
+          if (wsRef.current === ws) setState((s) => ({ ...s, status: 'connecting' }))
+        }, 500)
         reconnectTimer = setTimeout(connect, delay)
       }
 
       ws.onerror = () => {
+        if (wsRef.current !== ws) return
         // 错误细节由 onclose/error 帧处理，此处仅确保关闭触发重连
         ws.close()
       }
@@ -234,6 +247,7 @@ export function useInterviewSocket(sessionId: string) {
       manualCloseRef.current = true
       clearInterval(pingTimer)
       clearTimeout(reconnectTimer)
+      clearTimeout(statusTimer)
       wsRef.current?.close()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -15,7 +15,7 @@ import (
 
 // Registry 指标注册表（协程安全）
 type Registry struct {
-	mu       sync.RWMutex
+	mu      sync.RWMutex
 	counters map[string]*CounterVec
 	hists    map[string]*HistogramVec
 }

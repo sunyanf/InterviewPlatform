@@ -30,6 +30,16 @@ export const authApi = {
   me: () => api.get<User>('/me'),
 }
 
+export interface CreateJobRequest {
+  category_id: string
+  title: string
+  description: string
+  requirements: string[]
+  skills: string[]
+  source?: string
+  source_url?: string
+}
+
 export const jobApi = {
   categories: () => api.get<Category[]>('/jobs/categories'),
   list: (params: { category_id?: string; page?: number; page_size?: number } = {}) => {
@@ -41,6 +51,7 @@ export const jobApi = {
     return api.get<JobList>(`/jobs${qs ? `?${qs}` : ''}`)
   },
   get: (id: string) => api.get<Job>(`/jobs/${id}`),
+  create: (req: CreateJobRequest) => api.post<Job>('/jobs', req),
 }
 
 export const resumeApi = {

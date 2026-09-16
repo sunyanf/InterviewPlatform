@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { tokenStore } from '../api/client'
+import { interviewApi } from '../api/endpoints'
 import type { Answer, AnswerAnalysis, InterviewSession, Question } from '../api/types'
 import { isAutoplayEnabled, speak } from '../interview/speech'
 
@@ -26,6 +27,7 @@ export interface AnswerEvent {
   questionId: string
   answer?: Answer
   analysis?: AnswerAnalysis
+  analysisSkipped?: boolean // 分析服务超时/失败：回答已记录，本轮不再转圈
   followUp?: Question
 }
 
@@ -97,7 +99,102 @@ export function useInterviewSocket(sessionId: string) {
     let pingTimer: ReturnType<typeof setInterval>
     let reconnectTimer: ReturnType<typeof setTimeout>
     let statusTimer: ReturnType<typeof setTimeout>
+    let pollTimers: ReturnType<typeof setTimeout>[] = []
+    let pollsArmed = false // 频繁重连下 snapshot 会反复到达，补拉只能排一次，避免定时器被无限重置
     let everOpened = false
+
+    const clearPolls = () => {
+      pollTimers.forEach((t) => clearTimeout(t))
+      pollTimers = []
+      pollsArmed = false
+    }
+
+    // 用服务端会话数据对账答题事件：重连后恢复 answer/analysis，
+    // 复用已存在的占位事件 key，避免重复气泡。
+    // 返回是否仍有悬而未决的答题（需要 REST 补拉）。
+    const reconcileFromSession = (sess: InterviewSession, finalize: boolean): boolean => {
+      let shouldPoll = false
+      setState((s) => {
+        const answeredQs = (sess.questions ?? []).filter((q) => q.answered && q.answer)
+        let events = s.answerEvents
+        for (const q of answeredQs) {
+          const answer = q.answer as Answer
+          const idx = events.findIndex((e) => e.questionId === q.id)
+          if (idx === -1) {
+            events = [
+              ...events,
+              {
+                key: nextId(),
+                questionId: q.id,
+                answer,
+                analysis: answer.analysis,
+                analysisSkipped: finalize && !answer.analysis ? true : undefined,
+              },
+            ]
+          } else {
+            const cur = events[idx]
+            const analysis = cur.analysis ?? answer.analysis
+            events = events.map((e, i) =>
+              i === idx
+                ? {
+                    ...e,
+                    answer: cur.answer ?? answer,
+                    analysis,
+                    analysisSkipped: analysis
+                      ? undefined
+                      : cur.analysisSkipped ?? (finalize ? true : undefined),
+                  }
+                : e,
+            )
+          }
+          if (!answer.analysis && !events.find((e) => e.questionId === q.id)?.analysisSkipped) {
+            shouldPoll = true
+          }
+        }
+        // finalize：补拉截止后仍无 answer 的占位，说明提交在断连时丢失
+        if (finalize) {
+          const answeredIds = new Set(answeredQs.map((q) => q.id))
+          const lost = events.some((e) => !e.answer && !answeredIds.has(e.questionId))
+          if (lost) {
+            events = events.filter((e) => e.answer || answeredIds.has(e.questionId))
+            return {
+              ...s,
+              session: sess,
+              answerEvents: events,
+              error: '上一条回答因网络中断未送达，请重新提交',
+            }
+          }
+        } else if (events.some((e) => !e.answer)) {
+          shouldPoll = true
+        }
+        return { ...s, session: sess, answerEvents: events }
+      })
+      return shouldPoll
+    }
+
+    // snapshot 到达时后台分析可能仍在进行（脱离连接 ctx 最多 30s）：
+    // 安排两轮 REST 补拉，把迟到的 analysis 对账回来。
+    const scheduleSnapshotPolls = (needPoll: boolean) => {
+      if (!needPoll || pollsArmed) return
+      pollsArmed = true
+      const fetchAndReconcile = (finalize: boolean, delayMs: number) => {
+        const t = setTimeout(() => {
+          interviewApi
+            .get(sessionId)
+            .then((fresh) => {
+              if (manualCloseRef.current) return
+              const stillPending = reconcileFromSession(fresh, finalize)
+              if (!finalize && !stillPending) clearPolls()
+            })
+            .catch(() => {
+              /* 补拉失败保持现状，不打断面试 */
+            })
+        }, delayMs)
+        pollTimers.push(t)
+      }
+      fetchAndReconcile(false, 10_000)
+      fetchAndReconcile(true, 28_000)
+    }
 
     const connect = () => {
       const token = tokenStore.get()
@@ -127,7 +224,9 @@ export function useInterviewSocket(sessionId: string) {
         switch (env.type) {
           case 'snapshot': {
             const sess = env.data as InterviewSession
-            setState((s) => ({ ...s, session: sess }))
+            // 重连全量恢复：先对账 answerEvents（含迟到 analysis 的 REST 补拉）
+            const needPoll = reconcileFromSession(sess, false)
+            scheduleSnapshotPolls(needPoll)
             break
           }
           case 'answer_saved': {
@@ -149,7 +248,20 @@ export function useInterviewSocket(sessionId: string) {
               answerEvents: fillLatest(s.answerEvents, (e) => !e.analysis, (e) => ({
                 ...e,
                 analysis,
+                analysisSkipped: undefined,
               })),
+            }))
+            break
+          }
+          case 'analysis_skipped': {
+            const data = env.data as { answer_id: string; question_id: string }
+            setState((s) => ({
+              ...s,
+              answerEvents: fillLatest(
+                s.answerEvents,
+                (e) => e.questionId === data.question_id && !e.analysis && !e.analysisSkipped,
+                (e) => ({ ...e, analysisSkipped: true }),
+              ),
             }))
             break
           }
@@ -211,7 +323,13 @@ export function useInterviewSocket(sessionId: string) {
             const data = env.data as { code: string; message: string }
             streamingRef.current = ''
             pendingSpeechRef.current = undefined
-            setState((s) => ({ ...s, streaming: '', error: `${data.code}: ${data.message}` }))
+            setState((s) => ({
+              ...s,
+              streaming: '',
+              error: `${data.code}: ${data.message}`,
+              // 提交失败：移除尚未落库的答题占位，避免永久“解析中”
+              answerEvents: s.answerEvents.filter((e) => e.answer),
+            }))
             break
           }
         }
@@ -248,6 +366,7 @@ export function useInterviewSocket(sessionId: string) {
       clearInterval(pingTimer)
       clearTimeout(reconnectTimer)
       clearTimeout(statusTimer)
+      clearPolls()
       wsRef.current?.close()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

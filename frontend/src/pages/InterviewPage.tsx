@@ -45,7 +45,10 @@ export default function InterviewPage() {
   useEffect(() => () => stopSpeaking(), [])
 
   const current = questions.find((q) => q.id === currentId) ?? null
-  const currentAnalysis = answerEvents.find((e) => e.answer?.question_id === currentId)?.analysis
+  const currentEvent = answerEvents.find((e) => e.questionId === currentId)
+  const currentAnalysis = currentEvent?.analysis
+  // busy 覆盖两个阶段：回答落库中 / 分析进行中；分析降级后不再转圈
+  const currentBusy = !!currentEvent && (!currentEvent.answer || (!currentEvent.analysis && !currentEvent.analysisSkipped))
 
   const selectQuestion = (q: Question) => setCurrentId(q.id)
 
@@ -140,12 +143,14 @@ export default function InterviewPage() {
           key={current?.id ?? 'none'}
           question={current}
           analysis={currentAnalysis}
+          analysisSkipped={!!currentEvent?.analysisSkipped}
           openingText={openingText}
           answered={!!current?.answered}
+          locked={session?.status !== 'RUNNING'}
           onSubmit={(text, durationMs) => {
             if (current) socket.sendAnswer(current.id, text, durationMs)
           }}
-          busy={answerEvents.some((e) => e.questionId === currentId && !e.answer)}
+          busy={currentBusy}
         />
       </section>
 
@@ -168,15 +173,19 @@ export default function InterviewPage() {
 function QuestionStage({
   question,
   analysis,
+  analysisSkipped,
   openingText,
   answered,
+  locked,
   onSubmit,
   busy,
 }: {
   question: Question | null
   analysis: AnswerAnalysis | undefined
+  analysisSkipped: boolean
   openingText: string
   answered: boolean
+  locked: boolean
   onSubmit: (text: string, durationMs: number) => void
   busy: boolean
 }) {
@@ -198,10 +207,10 @@ function QuestionStage({
 
   // 客户端兜底：提交后 40s 仍未收到落库确认，提示可先继续（后端分析有 30s 超时降级）
   useEffect(() => {
-    if (!submitted || !busy || analysis) return
+    if (!submitted || !busy || analysis || analysisSkipped) return
     const timer = window.setTimeout(() => setSlow(true), 40_000)
     return () => window.clearTimeout(timer)
-  }, [submitted, busy, analysis])
+  }, [submitted, busy, analysis, analysisSkipped])
 
   if (!question) {
     return (
@@ -212,7 +221,7 @@ function QuestionStage({
   }
 
   const submit = () => {
-    if (!text.trim()) return
+    if (!text.trim() || locked) return
     onSubmit(text, Date.now() - startedAt.current)
     setSubmitted(true)
   }
@@ -241,17 +250,23 @@ function QuestionStage({
 
       {!submitted ? (
         <>
+          {locked && (
+            <div className="dim" style={{ fontSize: 13, marginBottom: 10 }}>
+              本场面试已结束，不能再提交回答；可查看已记录的回答与分析。
+            </div>
+          )}
           <textarea
             className="input"
             style={{ minHeight: 200, fontSize: 15, lineHeight: 1.8 }}
             placeholder="在这里输入你的回答，尽量结合项目实例与具体数据…"
             value={text}
+            disabled={locked}
             onChange={(e) => setText(e.target.value)}
           />
           <div style={{ marginTop: 12 }}>
             <VoiceRecorder
               questionId={question.id}
-              disabled={busy}
+              disabled={busy || locked}
               onTranscript={(t) =>
                 setText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${t}` : t))
               }
@@ -261,7 +276,7 @@ function QuestionStage({
             <span className="dim mono" style={{ fontSize: 12 }}>
               {text.trim().length} 字
             </span>
-            <button className="btn btn-primary" onClick={submit} disabled={busy || !text.trim()}>
+            <button className="btn btn-primary" onClick={submit} disabled={busy || locked || !text.trim()}>
               {busy ? (
                 <>
                   <span className="spinner" /> 考官分析中…
@@ -282,19 +297,19 @@ function QuestionStage({
             </p>
           </div>
 
-          {busy && !analysis && !slow && (
+          {busy && !analysis && !analysisSkipped && !slow && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }} className="muted">
               <span className="spinner" /> 正在拆解你的论点与知识缺口…
             </div>
           )}
 
-          {busy && !analysis && slow && (
+          {busy && !analysis && !analysisSkipped && slow && (
             <div className="dim" style={{ fontSize: 13 }}>
               分析服务响应较慢，你的回答已提交，可以先从左侧选择其他题目继续作答，分析结果稍后自动出现。
             </div>
           )}
 
-          {!busy && !analysis && question.answer && (
+          {!busy && !analysis && analysisSkipped && (
             <div className="dim" style={{ fontSize: 13 }}>
               本轮分析服务繁忙或超时，回答已记录，可继续作答其他题目。
             </div>
@@ -308,34 +323,39 @@ function QuestionStage({
 }
 
 function AnalysisView({ analysis }: { analysis: AnswerAnalysis }) {
+  // 历史数据中 LLM 数组字段可能为 null（缺省归一化前的记录），展示层做防御
+  const correct = analysis.correct_points ?? []
+  const missing = analysis.missing_points ?? []
+  const wrong = analysis.wrong_points ?? []
+  const gaps = analysis.knowledge_gaps ?? []
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {analysis.correct_points.length > 0 && (
+      {correct.length > 0 && (
         <div className="analysis-box analysis-good">
           <strong style={{ color: 'var(--jade)' }}>✓ 答到的点</strong>
           <ul style={{ margin: '6px 0 0 18px' }}>
-            {analysis.correct_points.map((p, i) => (
+            {correct.map((p, i) => (
               <li key={i}>{p}</li>
             ))}
           </ul>
         </div>
       )}
-      {(analysis.missing_points.length > 0 || analysis.wrong_points.length > 0) && (
+      {(missing.length > 0 || wrong.length > 0) && (
         <div className="analysis-box analysis-gap">
           <strong style={{ color: 'var(--accent)' }}>! 待补强</strong>
           <ul style={{ margin: '6px 0 0 18px' }}>
-            {analysis.missing_points.map((p, i) => (
+            {missing.map((p, i) => (
               <li key={`m${i}`}>遗漏：{p}</li>
             ))}
-            {analysis.wrong_points.map((p, i) => (
+            {wrong.map((p, i) => (
               <li key={`w${i}`}>偏差：{p}</li>
             ))}
           </ul>
         </div>
       )}
-      {analysis.knowledge_gaps.length > 0 && (
+      {gaps.length > 0 && (
         <p className="dim" style={{ fontSize: 13 }}>
-          知识缺口：{analysis.knowledge_gaps.join('；')}
+          知识缺口：{gaps.join('；')}
         </p>
       )}
     </div>

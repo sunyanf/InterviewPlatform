@@ -54,24 +54,6 @@ export function ChatPanel({
         <span className="muted" style={{ fontSize: 12.5 }}>和考官自由追问</span>
         {speechSupported() && (
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-            {speaking && (
-              <button
-                type="button"
-                onClick={stopSpeaking}
-                title="立即停止面试官朗读"
-                style={{
-                  border: '1px solid var(--accent)',
-                  background: 'transparent',
-                  color: 'var(--accent)',
-                  borderRadius: 6,
-                  padding: '2px 10px',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                }}
-              >
-                ■ 停止朗读
-              </button>
-            )}
             <label
               className="dim"
               style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
@@ -137,6 +119,42 @@ export function ChatPanel({
       )}
 
       <div style={{ borderTop: '1px solid var(--line)', padding: 12 }}>
+        {speechSupported() && speaking && (
+          <button
+            type="button"
+            onClick={stopSpeaking}
+            title="立即停止面试官朗读"
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 10,
+              marginBottom: 10,
+              padding: '11px 16px',
+              fontSize: 14.5,
+              fontWeight: 600,
+              color: '#fff',
+              background: 'var(--accent)',
+              border: 'none',
+              borderRadius: 10,
+              cursor: 'pointer',
+              boxShadow: '0 2px 10px rgba(0,0,0,0.12)',
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: 11,
+                height: 11,
+                borderRadius: 2,
+                background: '#fff',
+                display: 'inline-block',
+              }}
+            />
+            面试官正在说话，点击停止
+          </button>
+        )}
         <textarea
           className="input"
           style={{ minHeight: 64, maxHeight: 140, resize: 'none', fontSize: 14 }}

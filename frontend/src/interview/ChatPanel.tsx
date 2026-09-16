@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatBubble } from '../ws/useInterviewSocket'
 import { speak, speechSupported, stopSpeaking, useSpeaking, useInterviewerVoice } from './speech'
+import { VoiceRecorder } from './VoiceRecorder'
 
 export function ChatPanel({
   bubbles,
@@ -150,6 +151,13 @@ export function ChatPanel({
             }
           }}
         />
+        <div style={{ marginTop: 8 }}>
+          <VoiceRecorder
+            questionId="free-talk"
+            disabled={disabled}
+            onTranscript={(t) => setDraft((prev) => (prev.trim() ? `${prev.trimEnd()}\n${t}` : t))}
+          />
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
           <span className="dim" style={{ fontSize: 12 }}>
             {replying ? '考官正在回复…' : 'Enter 发送，Shift+Enter 换行'}

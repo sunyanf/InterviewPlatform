@@ -93,5 +93,8 @@ func (s *Service) ListJobs(ctx context.Context, req ListJobsRequest) ([]Job, int
 		s.log.Error("list jobs failed", "category_id", req.CategoryID, "error", err)
 		return nil, 0, apperrors.Wrap("INTERNAL_ERROR", "查询岗位列表失败", 500, err)
 	}
+	if list == nil {
+		list = []Job{} // 空结果输出 []，避免前端拿到 null
+	}
 	return list, total, nil
 }

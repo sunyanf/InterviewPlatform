@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -26,6 +27,10 @@ type Client struct {
 	send     chan []byte
 	shutdown chan struct{} // 通知 writePump 发 close frame 并退出
 	closed   chan struct{} // writePump 退出（conn 已关闭）
+
+	// 每类耗时消息同时只允许一个在途：读循环异步派发后防止帧流交错
+	answerInFlight atomic.Bool
+	chatInFlight   atomic.Bool
 
 	closeOnce sync.Once
 	reason    string

@@ -348,14 +348,17 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID, sessionID string, re
 		return nil, apperrors.Wrap("INTERNAL_ERROR", "保存回答失败", 500, err)
 	}
 
-	// Agent 回答分析（尽力而为：回答已保存，分析失败不阻塞提交）
+	// Agent 回答分析（尽力而为：回答已保存，分析失败/超时不阻塞提交）
+	// 单独加超时，避免模型长时间无响应时拖住整条提交流程
 	var analysis *agent.AnswerAnalysis
-	analysis, err = s.agent.AnalyzeAnswer(ctx, agent.AnalyzeAnswerInput{
+	analyzeCtx, analyzeCancel := context.WithTimeout(ctx, analyzeAnswerTimeout)
+	analysis, err = s.agent.AnalyzeAnswer(analyzeCtx, agent.AnalyzeAnswerInput{
 		Question:       q.Question,
 		ExpectedPoints: q.ExpectedPoints,
 		AnswerText:     req.TextContent,
 		Difficulty:     q.Difficulty,
 	})
+	analyzeCancel()
 	if err != nil {
 		metrics.AgentFailures.Inc("analyze_answer")
 		s.log.Warn("analyze answer failed", "session_id", sess.ID, "question_id", q.ID, "error", err)
@@ -367,12 +370,14 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID, sessionID string, re
 	// Agent 追问决策（仅普通问题可追问，避免追问链无限延伸）
 	var followUp *Question
 	if analysis != nil && q.QuestionType != QTypeFollowUp {
-		decision, err := s.agent.DecideFollowUp(ctx, agent.FollowUpInput{
+		followUpCtx, followUpCancel := context.WithTimeout(ctx, decideFollowUpTimeout)
+		decision, err := s.agent.DecideFollowUp(followUpCtx, agent.FollowUpInput{
 			Question:       q.Question,
 			ExpectedPoints: q.ExpectedPoints,
 			AnswerText:     req.TextContent,
 			Analysis:       analysis,
 		})
+		followUpCancel()
 		if err != nil {
 			metrics.AgentFailures.Inc("decide_followup")
 			s.log.Warn("decide follow-up failed", "session_id", sess.ID, "error", err)

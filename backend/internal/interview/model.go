@@ -26,6 +26,12 @@ const (
 	QTypeFollowUp   = "follow_up"
 )
 
+// 答题链路中各 LLM 步骤的超时上限：超时即降级（回答已保存，不阻塞候选人继续作答）
+const (
+	analyzeAnswerTimeout  = 30 * time.Second
+	decideFollowUpTimeout = 20 * time.Second
+)
+
 // SessionConfig 面试配置
 type SessionConfig struct {
 	QuestionCount   int `json:"question_count"`

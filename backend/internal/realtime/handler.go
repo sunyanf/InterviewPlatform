@@ -156,19 +156,46 @@ func (h *Handler) HandleWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case typeAnswer:
-			if !h.handleAnswer(ctx, client, sess, env.Data) {
-				return
-			}
+			// 答题含 LLM 分析（可达数十秒），必须异步处理：
+			// 否则读循环无法消费 ping，60s 读空闲超时后连接被服务端断开
+			h.dispatchAnswer(ctx, client, sess, env.Data)
 		case typeChat:
-			if !h.handleChat(ctx, client, sess, env.Data) {
-				return
-			}
+			h.dispatchChat(ctx, client, sess, env.Data)
 		default:
 			if !client.sendFrame(marshalEvent(typeError, ErrorData{Code: "UNKNOWN_MESSAGE_TYPE", Message: "未知消息类型: " + env.Type})) {
 				return
 			}
 		}
 	}
+}
+
+// dispatchAnswer 异步派发结构化回答，读循环不被 LLM 调用阻塞。
+// goroutine 随连接 ctx 取消而终止；发送失败仅意味着连接已关闭，直接退出即可。
+func (h *Handler) dispatchAnswer(ctx context.Context, c *Client, sess *interview.Session, raw json.RawMessage) {
+	if !c.answerInFlight.CompareAndSwap(false, true) {
+		c.sendFrame(marshalEvent(typeError, ErrorData{
+			Code: "ANSWER_IN_PROGRESS", Message: "上一条回答仍在分析中，请稍候",
+		}))
+		return
+	}
+	go func() {
+		defer c.answerInFlight.Store(false)
+		h.handleAnswer(ctx, c, sess, raw)
+	}()
+}
+
+// dispatchChat 异步派发言官对话（流式输出），同一连接同时只允许一轮对话
+func (h *Handler) dispatchChat(ctx context.Context, c *Client, sess *interview.Session, raw json.RawMessage) {
+	if !c.chatInFlight.CompareAndSwap(false, true) {
+		c.sendFrame(marshalEvent(typeError, ErrorData{
+			Code: "CHAT_IN_PROGRESS", Message: "考官正在回复中，请稍候",
+		}))
+		return
+	}
+	go func() {
+		defer c.chatInFlight.Store(false)
+		h.handleChat(ctx, c, sess, raw)
+	}()
 }
 
 // handleAnswer 处理结构化回答，返回 false 表示连接已失效需退出

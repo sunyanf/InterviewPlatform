@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatBubble } from '../ws/useInterviewSocket'
+import { speak, speechSupported } from './speech'
 
 export function ChatPanel({
   bubbles,
@@ -68,13 +69,23 @@ export function ChatPanel({
         {bubbles.map((b) => (
           <div key={b.id} className={`bubble bubble-${b.role}`}>
             <div>{b.text}</div>
-            {b.role === 'interviewer' && b.speechUrl && (
-              <audio
-                controls
-                preload="none"
-                src={b.speechUrl}
-                style={{ marginTop: 8, width: '100%', height: 32 }}
-              />
+            {b.role === 'interviewer' && speechSupported() && (
+              <button
+                type="button"
+                onClick={() => speak(b.text)}
+                title="朗读这条回复"
+                className="dim"
+                style={{
+                  marginTop: 6,
+                  border: 'none',
+                  background: 'transparent',
+                  padding: 0,
+                  cursor: 'pointer',
+                  fontSize: 12,
+                }}
+              >
+                🔊 朗读
+              </button>
             )}
           </div>
         ))}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { tokenStore } from '../api/client'
 import type { Answer, AnswerAnalysis, InterviewSession, Question } from '../api/types'
+import { speak } from '../interview/speech'
 
 // WS 事件信封
 interface Envelope<T = unknown> {
@@ -55,6 +56,7 @@ export function useInterviewSocket(sessionId: string) {
   const retryRef = useRef(0)
   const manualCloseRef = useRef(false)
   const pendingSpeechRef = useRef<string | undefined>(undefined)
+  const streamingRef = useRef('')
 
   const send = useCallback((type: string, data: unknown) => {
     const ws = wsRef.current
@@ -65,8 +67,11 @@ export function useInterviewSocket(sessionId: string) {
 
   const sendChat = useCallback(
     (message: string, withTTS: boolean) => {
+      streamingRef.current = ''
+      pendingSpeechRef.current = undefined
       setState((s) => ({
         ...s,
+        streaming: '',
         bubbles: [...s.bubbles, { id: nextId(), role: 'candidate', text: message }],
       }))
       send('chat', { message, tts: withTTS })
@@ -163,6 +168,7 @@ export function useInterviewSocket(sessionId: string) {
           }
           case 'chat_delta': {
             const { delta } = env.data as { delta: string }
+            streamingRef.current += delta
             setState((s) => ({ ...s, streaming: s.streaming + delta }))
             break
           }
@@ -174,25 +180,31 @@ export function useInterviewSocket(sessionId: string) {
           case 'chat_done': {
             const url = pendingSpeechRef.current
             pendingSpeechRef.current = undefined
-            setState((s) => {
-              const text = s.streaming.trim()
-              if (!text) return { ...s, streaming: '' }
-              return {
+            const text = streamingRef.current.trim()
+            streamingRef.current = ''
+            if (text) {
+              setState((s) => ({
                 ...s,
                 streaming: '',
                 bubbles: [
                   ...s.bubbles,
                   { id: nextId(), role: 'interviewer', text, speechUrl: url },
                 ],
-              }
-            })
+              }))
+              // 用户请求了语音（后端返回 speech url）时，用浏览器朗读真实回复
+              if (url) speak(text)
+            } else {
+              setState((s) => ({ ...s, streaming: '' }))
+            }
             break
           }
           case 'pong':
             break
           case 'error': {
             const data = env.data as { code: string; message: string }
-            setState((s) => ({ ...s, error: `${data.code}: ${data.message}` }))
+            streamingRef.current = ''
+            pendingSpeechRef.current = undefined
+            setState((s) => ({ ...s, streaming: '', error: `${data.code}: ${data.message}` }))
             break
           }
         }

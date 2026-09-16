@@ -6,6 +6,7 @@ import { useInterviewSocket } from '../ws/useInterviewSocket'
 import { QTYPE_LABEL } from '../lib/display'
 import { ChatPanel } from '../interview/ChatPanel'
 import { VoiceRecorder } from '../interview/VoiceRecorder'
+import { speak, speechSupported, stopSpeaking } from '../interview/speech'
 
 export default function InterviewPage() {
   const { id = '' } = useParams()
@@ -15,7 +16,7 @@ export default function InterviewPage() {
 
   const [currentId, setCurrentId] = useState<string>('')
   const [finishing, setFinishing] = useState(false)
-  const [openingUrl, setOpeningUrl] = useState('')
+  const [openingText, setOpeningText] = useState('')
 
   const questions = useMemo(() => session?.questions ?? [], [session])
 
@@ -27,15 +28,21 @@ export default function InterviewPage() {
     }
   }, [questions, currentId])
 
-  // 拉取开场白语音（mock TTS；失败静默，不影响文字面试）
+  // 拉取开场白文本并用浏览器朗读（失败静默，不影响文字面试）
   useEffect(() => {
-    if (session?.status === 'RUNNING' && !openingUrl) {
+    if (session?.status === 'RUNNING' && !openingText) {
       interviewApi
         .openingSpeech(id)
-        .then((r) => setOpeningUrl(r.download_url))
+        .then((r) => {
+          setOpeningText(r.text)
+          speak(r.text)
+        })
         .catch(() => undefined)
     }
-  }, [session?.status, id, openingUrl])
+  }, [session?.status, id, openingText])
+
+  // 离开面试间时停止朗读
+  useEffect(() => () => stopSpeaking(), [])
 
   const current = questions.find((q) => q.id === currentId) ?? null
   const currentAnalysis = answerEvents.find((e) => e.answer?.question_id === currentId)?.analysis
@@ -133,7 +140,7 @@ export default function InterviewPage() {
           key={current?.id ?? 'none'}
           question={current}
           analysis={currentAnalysis}
-          openingUrl={openingUrl}
+          openingText={openingText}
           answered={!!current?.answered}
           onSubmit={(text, durationMs) => {
             if (current) socket.sendAnswer(current.id, text, durationMs)
@@ -162,14 +169,14 @@ export default function InterviewPage() {
 function QuestionStage({
   question,
   analysis,
-  openingUrl,
+  openingText,
   answered,
   onSubmit,
   busy,
 }: {
   question: Question | null
   analysis: AnswerAnalysis | undefined
-  openingUrl: string
+  openingText: string
   answered: boolean
   onSubmit: (text: string, durationMs: number) => void
   busy: boolean
@@ -212,10 +219,16 @@ function QuestionStage({
 
       <h1 style={{ fontSize: 25, lineHeight: 1.5, marginBottom: 18 }}>{question.question}</h1>
 
-      {openingUrl && question.seq === 1 && (
-        <audio controls src={openingUrl} style={{ width: '100%', marginBottom: 18, height: 38 }}>
-          开场白语音
-        </audio>
+      {openingText && question.seq === 1 && speechSupported() && (
+        <button
+          type="button"
+          className="btn"
+          onClick={() => speak(openingText)}
+          style={{ marginBottom: 18, padding: '6px 14px', fontSize: 13 }}
+          title="再次播放面试官开场白"
+        >
+          🔊 播放开场白
+        </button>
       )}
 
       {!submitted ? (

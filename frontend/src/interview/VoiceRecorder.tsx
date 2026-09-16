@@ -71,10 +71,13 @@ function formatDuration(ms: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
-// 单次识别最长时长（到点自动收尾，避免识别器异常时无限占用麦克风）
+// 单次录音最长时长（到点自动收尾，避免识别器异常时无限占用麦克风）
 const MAX_RECORD_MS = 180_000
 // 点击停止后等待识别器收尾的最长时间，超时强制 abort 并提交已有文本
 const STOP_WATCHDOG_MS = 1500
+// 识别器自行断开（静默/网络抖动）后的自动续听延迟与无语音重试上限
+const RESTART_DELAY_MS = 250
+const MAX_AUTO_RESTARTS = 8
 
 // VoiceRecorder 录制答题语音。
 // 优先使用浏览器原生 Web Speech API 实时识别（中文，停止即回填，无需后端 ASR key）；
@@ -92,7 +95,8 @@ export function VoiceRecorder({
   const [phase, setPhase] = useState<Phase>('idle')
   const [elapsedMs, setElapsedMs] = useState(0)
   const [error, setError] = useState<string | null>(null)
-  const [interim, setInterim] = useState('')
+  const [committed, setCommitted] = useState('') // 已确定的识别文本（稳定，不回退）
+  const [interim, setInterim] = useState('') // 正在识别中的临时文本（可能变化）
 
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -106,10 +110,13 @@ export function VoiceRecorder({
   const finalTextRef = useRef('')
   const interimRef = useRef('')
   const userStoppedRef = useRef(false)
-  const finishedRef = useRef(false) // 保证一次识别只收尾一次
+  const finishedRef = useRef(false) // 保证一次录音只收尾一次
   const unmountedRef = useRef(false)
   const maxTimerRef = useRef<number | null>(null)
   const watchdogRef = useRef<number | null>(null)
+  const restartTimerRef = useRef<number | null>(null)
+  const autoRestartsRef = useRef(0)
+  const startBrowserASRRef = useRef<() => void>(() => undefined)
   const onTranscriptRef = useRef(onTranscript)
   onTranscriptRef.current = onTranscript
 
@@ -139,6 +146,7 @@ export function VoiceRecorder({
       unmountedRef.current = true
       if (maxTimerRef.current) window.clearTimeout(maxTimerRef.current)
       if (watchdogRef.current) window.clearTimeout(watchdogRef.current)
+      if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current)
       if (recognitionRef.current) {
         recognitionRef.current.onresult = null
         recognitionRef.current.onerror = null
@@ -176,6 +184,10 @@ export function VoiceRecorder({
       window.clearTimeout(watchdogRef.current)
       watchdogRef.current = null
     }
+    if (restartTimerRef.current) {
+      window.clearTimeout(restartTimerRef.current)
+      restartTimerRef.current = null
+    }
     const recognition = recognitionRef.current
     if (recognition) {
       recognition.onresult = null
@@ -184,7 +196,9 @@ export function VoiceRecorder({
       recognitionRef.current = null
     }
     const text = (finalTextRef.current + interimRef.current).trim()
+    finalTextRef.current = ''
     interimRef.current = ''
+    setCommitted('')
     setInterim('')
     setPhase('idle')
     setElapsedMs(0)
@@ -196,23 +210,41 @@ export function VoiceRecorder({
     }
   }
 
-  const startBrowserASR = () => {
-    if (!SRTor) return
-    setError(null)
-    setInterim('')
-    finalTextRef.current = ''
-    interimRef.current = ''
-    userStoppedRef.current = false
-    finishedRef.current = false
+  // 识别器会因静默/网络抖动自行结束会话；用户未主动停止时自动续听，保留已识别文本
+  const scheduleRestart = () => {
+    if (finishedRef.current || unmountedRef.current || userStoppedRef.current) return
+    if (autoRestartsRef.current >= MAX_AUTO_RESTARTS) {
+      if (finalTextRef.current.trim()) {
+        finishBrowserASR('auto')
+      } else {
+        finishBrowserASR('error', '语音识别服务多次连接失败，请检查网络/代理后重试，或改用文字作答')
+      }
+      return
+    }
+    autoRestartsRef.current += 1
+    restartTimerRef.current = window.setTimeout(() => {
+      restartTimerRef.current = null
+      if (!finishedRef.current && !unmountedRef.current && !userStoppedRef.current) {
+        startBrowserASRRef.current()
+      }
+    }, RESTART_DELAY_MS)
+  }
 
+  // beginRecognition 启动一轮识别会话（一次录音中可能包含多轮，自动续听）
+  const beginRecognition = () => {
+    if (!SRTor || finishedRef.current || unmountedRef.current) return
     const recognition = new SRTor()
     recognition.lang = 'zh-CN'
     recognition.continuous = true
     recognition.interimResults = true
 
     recognition.onresult = (e: SREvent) => {
+      // 关键去重：只处理 resultIndex 之后的新结果。
+      // Chrome 的事件 results 包含本会话全部历史结果，从头遍历并累加 final
+      // 会把同一句话重复追加 N 遍。
+      autoRestartsRef.current = 0 // 听到声音说明服务正常，重置续听计数
       let interimText = ''
-      for (let i = 0; i < e.results.length; i++) {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
         const result = e.results[i]
         if (result.isFinal) {
           finalTextRef.current += result[0].transcript
@@ -221,58 +253,88 @@ export function VoiceRecorder({
         }
       }
       interimRef.current = interimText
+      setCommitted(finalTextRef.current)
       setInterim(interimText)
     }
 
     recognition.onerror = (e: SRErrorEvent) => {
       const name = e.error
-      // 已经识别到内容（final 或 interim）时，任何错误都先保住文本，不当空结果处理
       const hasText = !!(finalTextRef.current + interimRef.current).trim()
-      if (hasText) {
-        userStoppedRef.current = true
-        finishBrowserASR('error')
-        return
-      }
+      // 已有文本：权限类以外的瞬时错误不打断，交给 onend 自动续听或用户手动停止
       if (name === 'not-allowed' || name === 'service-not-allowed') {
         finishBrowserASR('error', '麦克风权限被拒绝，请在浏览器地址栏允许麦克风后重试')
-      } else if (name === 'network') {
-        finishBrowserASR('error', '语音识别服务不可达（需联网，可开启系统代理后重试），请改用文字作答')
-      } else if (name === 'no-speech' || name === 'audio-capture') {
-        finishBrowserASR('error', '未检测到语音，请靠近麦克风重试，或改用文字作答')
-      } else if (name === 'aborted' || name === 'canceled') {
-        finishBrowserASR('auto')
-      } else {
-        finishBrowserASR('error', `语音识别失败（${name}），请改用文字作答`)
+        return
       }
+      if (name === 'audio-capture') {
+        finishBrowserASR('error', '未检测到麦克风设备，请检查设备后重试')
+        return
+      }
+      if (name === 'network' && !hasText && autoRestartsRef.current >= MAX_AUTO_RESTARTS - 1) {
+        finishBrowserASR('error', '语音识别服务不可达（需联网，可开启系统代理后重试），请改用文字作答')
+        return
+      }
+      // no-speech / network（前几次）/ aborted 等：静默等待 onend 续听，不清空预览
     }
 
     recognition.onend = () => {
-      // 识别器自行结束（静默断句等）：有文本就提交，无文本不报错（用户可再次点击）
-      finishBrowserASR(userStoppedRef.current ? 'manual' : 'auto')
+      // 新一轮会话开始后本回调失效
+      if (recognitionRef.current !== recognition) return
+      recognitionRef.current = null
+      if (finishedRef.current || unmountedRef.current) return
+      if (userStoppedRef.current) {
+        finishBrowserASR('manual')
+      } else {
+        // 静默或网络抖动导致的结束：保留已识别文本，自动续听
+        scheduleRestart()
+      }
     }
 
     try {
       recognition.start()
       recognitionRef.current = recognition
-      startedAtRef.current = Date.now()
-      setElapsedMs(0)
-      tickRef.current = window.setInterval(() => {
-        setElapsedMs(Date.now() - startedAtRef.current)
-      }, 500)
-      // 兜底：到达最长时长自动收尾
-      maxTimerRef.current = window.setTimeout(() => {
-        userStoppedRef.current = true
-        stopBrowserASR()
-      }, MAX_RECORD_MS)
-      setPhase('recording')
     } catch {
-      setError('无法启动语音识别，请重试或改用文字作答')
+      // start 过快（旧会话未完全释放）时短暂重试，其余情况交给 onend/用户重试
+      restartTimerRef.current = window.setTimeout(() => {
+        if (!finishedRef.current && !userStoppedRef.current && !unmountedRef.current) {
+          beginRecognition()
+        }
+      }, RESTART_DELAY_MS)
     }
   }
+
+  const startBrowserASR = () => {
+    if (!SRTor) return
+    setError(null)
+    setCommitted('')
+    setInterim('')
+    finalTextRef.current = ''
+    interimRef.current = ''
+    userStoppedRef.current = false
+    finishedRef.current = false
+    autoRestartsRef.current = 0
+
+    startedAtRef.current = Date.now()
+    setElapsedMs(0)
+    stopTick()
+    tickRef.current = window.setInterval(() => {
+      setElapsedMs(Date.now() - startedAtRef.current)
+    }, 500)
+    // 兜底：到达最长时长自动收尾
+    maxTimerRef.current = window.setTimeout(() => {
+      stopBrowserASR()
+    }, MAX_RECORD_MS)
+    setPhase('recording')
+    beginRecognition()
+  }
+  startBrowserASRRef.current = startBrowserASR
 
   const stopBrowserASR = () => {
     if (finishedRef.current) return
     userStoppedRef.current = true
+    if (restartTimerRef.current) {
+      window.clearTimeout(restartTimerRef.current)
+      restartTimerRef.current = null
+    }
     const recognition = recognitionRef.current
     try {
       recognition?.stop()
@@ -430,18 +492,19 @@ export function VoiceRecorder({
           </span>
         )}
       </div>
-      {recording && interim && (
+      {recording && (committed || interim) && (
         <div
-          className="dim"
           style={{
             fontSize: 13,
+            lineHeight: 1.7,
             padding: '8px 12px',
             background: 'var(--surface-2, #f7f7f9)',
             borderRadius: 8,
             border: '1px dashed var(--line)',
           }}
         >
-          {interim}
+          {committed}
+          {interim && <span className="dim">{interim}</span>}
         </div>
       )}
     </div>

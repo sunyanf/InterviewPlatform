@@ -69,9 +69,15 @@ func (r *Repository) GetByID(ctx context.Context, id string) (*Session, error) {
 // ListByUserID 查询用户的面试列表
 func (r *Repository) ListByUserID(ctx context.Context, userID string) ([]Session, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT id, user_id, job_id, COALESCE(resume_id,''), interview_type, mode, status, config::text, metadata::text,
-		        started_at, ended_at, created_at, updated_at
-		 FROM interview_sessions WHERE user_id = $1 ORDER BY created_at DESC`, userID)
+		`SELECT s.id, s.user_id, s.job_id, COALESCE(s.resume_id,''), s.interview_type, s.mode, s.status,
+		        s.config::text, s.metadata::text,
+		        s.started_at, s.ended_at, s.created_at, s.updated_at,
+		        COALESCE(j.title, ''),
+		        (SELECT COUNT(*) FROM interview_answers a WHERE a.session_id = s.id)
+		 FROM interview_sessions s
+		 LEFT JOIN jobs j ON j.id = s.job_id
+		 WHERE s.user_id = $1
+		 ORDER BY s.created_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -81,8 +87,10 @@ func (r *Repository) ListByUserID(ctx context.Context, userID string) ([]Session
 	for rows.Next() {
 		var s Session
 		var configJSON, metadataJSON string
-		if err := rows.Scan(&s.ID, &s.UserID, &s.JobID, &s.ResumeID, &s.InterviewType, &s.Mode, &s.Status, &configJSON, &metadataJSON,
-			&s.StartedAt, &s.EndedAt, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.UserID, &s.JobID, &s.ResumeID, &s.InterviewType, &s.Mode, &s.Status,
+			&configJSON, &metadataJSON,
+			&s.StartedAt, &s.EndedAt, &s.CreatedAt, &s.UpdatedAt,
+			&s.JobTitle, &s.AnsweredCount); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(configJSON), &s.Config)

@@ -10,6 +10,7 @@ import JobsPage from './pages/JobsPage'
 import PreparePage from './pages/PreparePage'
 import InterviewPage from './pages/InterviewPage'
 import ReportPage from './pages/ReportPage'
+import AdminPage from './pages/AdminPage'
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth()
@@ -22,6 +23,21 @@ function RequireAuth({ children }: { children: ReactNode }) {
     )
   }
   if (!user) return <Navigate to="/login" state={{ from: location }} replace />
+  return <>{children}</>
+}
+
+function RequireAdmin({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth()
+  const location = useLocation()
+  if (loading) {
+    return (
+      <div style={{ display: 'grid', placeItems: 'center', height: '60vh' }}>
+        <div className="spinner" />
+      </div>
+    )
+  }
+  if (!user) return <Navigate to="/login" state={{ from: location }} replace />
+  if (user.role !== 'admin') return <Navigate to="/" replace />
   return <>{children}</>
 }
 
@@ -74,6 +90,14 @@ export default function App() {
             <RequireAuth>
               <ReportPage />
             </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <RequireAdmin>
+              <AdminPage />
+            </RequireAdmin>
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />

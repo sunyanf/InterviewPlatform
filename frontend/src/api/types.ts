@@ -13,6 +13,7 @@ export interface User {
   nickname: string
   avatar_url?: string
   status: string
+  role: string
   created_at: string
   updated_at: string
 }
@@ -294,6 +295,19 @@ export interface TaskInfo {
   attempts: number
   max_attempts: number
   last_error: string
-  created_at: string
   updated_at: string
+}
+
+// ---------- admin ----------
+export interface Setting {
+  key: string
+  value: string
+  updated_at: string
+}
+
+export interface AdminUserList {
+  list: User[]
+  total: number
+  page: number
+  size: number
 }

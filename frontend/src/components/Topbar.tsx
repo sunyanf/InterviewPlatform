@@ -21,6 +21,11 @@ export function Topbar() {
             <Link to="/jobs" className="muted" style={{ fontSize: 14 }}>
               选择岗位
             </Link>
+            {user.role === 'admin' && (
+              <Link to="/admin" className="muted" style={{ fontSize: 14 }}>
+                管理后台
+              </Link>
+            )}
             <span className="dim" style={{ fontSize: 13 }}>
               {user.nickname || user.email}
             </span>

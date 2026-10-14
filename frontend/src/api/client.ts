@@ -41,6 +41,37 @@ interface RequestOptions {
   retried?: boolean
 }
 
+// 提前刷新余量：剩余有效期不足该秒数即主动刷新，避免请求/WS 建连途中过期
+const TOKEN_REFRESH_SKEW_SECONDS = 60
+
+// 解析 JWT 的 exp（Unix 秒）。仅用于客户端预判时效，不做签名校验（验签在服务端）
+function getTokenExpiry(token: string): number | null {
+  try {
+    const payloadB64 = token.split('.')[1]
+    if (!payloadB64) return null
+    const b64 = payloadB64.replace(/-/g, '+').replace(/_/g, '/')
+    const payload = JSON.parse(atob(b64)) as { exp?: unknown }
+    return typeof payload.exp === 'number' ? payload.exp : null
+  } catch {
+    return null
+  }
+}
+
+// 返回当前可用的 access token：缺失或临近/已经过期时先单飞静默刷新；
+// 无法取得有效令牌（未登录/刷新失败）返回 null，由调用方引导重新登录。
+// WebSocket 无法走 401 静默重放，建连前必须先调用本函数。
+export async function getValidAccessToken(): Promise<string | null> {
+  const token = tokenStore.get()
+  if (token) {
+    const exp = getTokenExpiry(token)
+    if (exp === null || exp - Date.now() / 1000 > TOKEN_REFRESH_SKEW_SECONDS) {
+      return token
+    }
+  }
+  if (!tokenStore.getRefresh()) return null
+  return refreshAccessToken()
+}
+
 // 刷新请求单飞行（single-flight）：并发 401 只触发一次 /auth/refresh
 let refreshInFlight: Promise<string | null> | null = null
 

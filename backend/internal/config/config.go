@@ -172,8 +172,9 @@ func Load() (*Config, error) {
 			UseSSL:    getEnvBool("STORAGE_USE_SSL", false),
 		},
 		JWT: JWTConfig{
-			Secret:     getEnv("JWT_SECRET", "change-me-in-production"),
-			ExpireTime: getEnvDuration("JWT_EXPIRE_TIME", 2*time.Hour),
+			Secret: getEnv("JWT_SECRET", "change-me-in-production"),
+			// Access token 短命：泄露窗口最小化，过期由前端静默刷新无感轮换（refresh 30 天）
+			ExpireTime: getEnvDuration("JWT_EXPIRE_TIME", 15*time.Minute),
 			RefreshTTL: getEnvDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
 			Issuer:     getEnv("JWT_ISSUER", "ai-interview-platform"),
 		},

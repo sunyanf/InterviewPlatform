@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestLoad_Defaults(t *testing.T) {
@@ -10,6 +11,8 @@ func TestLoad_Defaults(t *testing.T) {
 	os.Unsetenv("APP_ENV")
 	os.Unsetenv("SERVER_PORT")
 	os.Unsetenv("DB_HOST")
+	os.Unsetenv("JWT_EXPIRE_TIME")
+	os.Unsetenv("REFRESH_TOKEN_TTL")
 
 	cfg, err := Load()
 	if err != nil {
@@ -24,6 +27,13 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 	if cfg.Database.Host != "localhost" {
 		t.Errorf("expected default db host localhost, got %s", cfg.Database.Host)
+	}
+	// Access token 必须短命（15 分钟），靠 refresh token 静默轮换
+	if cfg.JWT.ExpireTime != 15*time.Minute {
+		t.Errorf("expected default access token ttl 15m, got %s", cfg.JWT.ExpireTime)
+	}
+	if cfg.JWT.RefreshTTL != 30*24*time.Hour {
+		t.Errorf("expected default refresh ttl 720h, got %s", cfg.JWT.RefreshTTL)
 	}
 }
 

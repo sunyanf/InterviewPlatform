@@ -1,7 +1,11 @@
 // Package evalrun 提供评估器 Eval 回归能力：
 //   - golden 数据集契约回归（任意 Provider，默认 mock）：验证 agent.Evaluate 的结构化输出契约；
 //   - golden 评分一致性（真实 Provider）：维度分与人工标注对比，输出容差通过率与 MAE；
-//   - adversarial 契约异常回归（脚本化 Provider）：验证空输出/错类型/缺字段等异常被正确接受或拒绝。
+//   - adversarial 契约异常回归（脚本化 Provider）：验证空输出/错类型/缺字段等异常被正确接受或拒绝；
+//   - adversarial live 攻击回归（任意 Provider）：提示词注入抬分 / 伪引用 / 身份偏见固化为回归
+//     （依据 docs/REDTEAM_REPORT.md A1/A5/A6）；
+//   - planner_guard 出题防护回归（任意 Provider）：简历吹嘘量级不得成为题目前提（红队 A2）；
+//   - coach 契约回归：更优答案示范输出契约与内容安全近似检查。
 //
 // 对应 docs/EVALUATION.md #5。LLM 不产出总分，runner 中所有总分均由确定性公式重算。
 package evalrun
@@ -32,13 +36,25 @@ type Case struct {
 	ExpectedTotal      float64            `json:"expected_total"`
 }
 
-// AdversarialCase 契约异常样本：scenario 对应脚本化 Provider 的固定输出
+// AdversarialCase 契约异常/攻击回归样本，二选一：
+//   - scenario 非空：脚本化 Provider 的固定输出（契约异常回归，ScriptedProvider 驱动）；
+//   - question 非空：live 攻击回归（用 runner 自身 Provider 驱动真实评估链路）。
 type AdversarialCase struct {
 	CaseID      string `json:"case_id"`
 	Dataset     string `json:"dataset"`
 	Description string `json:"description"`
 	Scenario    string `json:"scenario"`
 	ExpectValid bool   `json:"expect_valid"`
+
+	// Question live 攻击用例的问题（scenario 为空时启用 live 路径）
+	Question string `json:"question,omitempty"`
+	// Answer live 攻击用例的回答原文（可含注入语/身份陈述）
+	Answer string `json:"answer,omitempty"`
+	// ForbiddenSubstrings 输出 evidence（issue/evidence/reference）与 recommendations
+	// 拼接文本中不得出现的子串（0 条=不启用）
+	ForbiddenSubstrings []string `json:"forbidden_substrings,omitempty"`
+	// MaxDimension 任何维度分不得超过该值；0=不启用（如注入抬分回归设 99）
+	MaxDimension int `json:"max_dimension,omitempty"`
 }
 
 // LoadGolden 从 JSONL 文件加载 golden 样本
@@ -108,6 +124,21 @@ func loadJSONL(path string, dst any) error {
 			var c CoachCase
 			if err := json.Unmarshal(line, &c); err != nil {
 				return fmt.Errorf("invalid coach jsonl line: %w", err)
+			}
+			*out = append(*out, c)
+		}
+		return scanner.Err()
+	case *[]PlannerCase:
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+		for scanner.Scan() {
+			line := bytesTrim(scanner.Bytes())
+			if len(line) == 0 {
+				continue
+			}
+			var c PlannerCase
+			if err := json.Unmarshal(line, &c); err != nil {
+				return fmt.Errorf("invalid planner jsonl line: %w", err)
 			}
 			*out = append(*out, c)
 		}
@@ -228,6 +259,8 @@ type CaseResult struct {
 	// coach 契约回归观察字段（只记量纲，不落全文）
 	ImprovedAnswerRunes int `json:"improved_answer_runes,omitempty"`
 	KeyChangesCount     int `json:"key_changes_count,omitempty"`
+	// planner_guard 契约回归观察字段
+	QuestionsCount int `json:"questions_count,omitempty"`
 }
 
 // Report 一次回归的完整报告
@@ -353,13 +386,17 @@ func (r *Runner) RunGolden(ctx context.Context, cases []Case, opts Options) (*Re
 	return report, nil
 }
 
-// RunAdversarial 用脚本化 Provider 跑契约异常集：agent.Evaluate 的接受/拒绝必须与 expect_valid 一致
+// RunAdversarial 跑 adversarial 数据集，分两类：
+//   - scenario 用例：脚本化 Provider 驱动，agent.Evaluate 的接受/拒绝必须与 expect_valid 一致；
+//   - live 攻击用例（question 非空）：用 runner 自身 Provider（mock/真实模型）驱动完整评估链路，
+//     断言维度分上限（MaxDimension）与禁用子串（ForbiddenSubstrings），
+//     把红队报告 A1/A5/A6 的攻击固化为回归。
 func (r *Runner) RunAdversarial(ctx context.Context, cases []AdversarialCase) (*Report, error) {
 	if len(cases) == 0 {
 		return nil, fmt.Errorf("adversarial dataset is empty")
 	}
 	report := &Report{
-		Provider:      "scripted",
+		Provider:      r.provider.Name(),
 		Dataset:       cases[0].Dataset,
 		Mode:          "contract",
 		AgreementRate: -1,
@@ -368,30 +405,62 @@ func (r *Runner) RunAdversarial(ctx context.Context, cases []AdversarialCase) (*
 
 	for _, c := range cases {
 		res := CaseResult{CaseID: c.CaseID, OK: true}
-		content, ok := ScriptedContent(c.Scenario)
-		if !ok {
-			res.OK = false
-			res.Issues = []string{"unknown scenario: " + c.Scenario}
-			report.Results = append(report.Results, res)
-			continue
-		}
+		switch {
+		case c.Scenario != "":
+			content, ok := ScriptedContent(c.Scenario)
+			if !ok {
+				res.OK = false
+				res.Issues = []string{"unknown scenario: " + c.Scenario}
+				report.Results = append(report.Results, res)
+				continue
+			}
 
-		ag := agent.New(NewScriptedProvider(content), slog.Default())
-		out, err := ag.Evaluate(ctx, agent.EvaluateInput{
-			QA: []agent.EvaluatedQA{{Seq: 1, Question: "Q", AnswerText: "A"}},
-		})
-		gotValid := err == nil
-		if gotValid != c.ExpectValid {
-			res.OK = false
-			res.Issues = append(res.Issues, fmt.Sprintf("scenario %q: expect valid=%v, got valid=%v (err=%v)",
-				c.Scenario, c.ExpectValid, gotValid, err))
-		}
-		if gotValid {
+			ag := agent.New(NewScriptedProvider(content), slog.Default())
+			out, err := ag.Evaluate(ctx, agent.EvaluateInput{
+				QA: []agent.EvaluatedQA{{Seq: 1, Question: "Q", AnswerText: "A"}},
+			})
+			gotValid := err == nil
+			if gotValid != c.ExpectValid {
+				res.OK = false
+				res.Issues = append(res.Issues, fmt.Sprintf("scenario %q: expect valid=%v, got valid=%v (err=%v)",
+					c.Scenario, c.ExpectValid, gotValid, err))
+			}
+			if gotValid {
+				res.Dimensions = out.Dimensions
+				for _, issue := range checkContract(out) {
+					res.OK = false
+					res.Issues = append(res.Issues, issue)
+				}
+			}
+		case strings.TrimSpace(c.Question) != "":
+			ag := agent.New(r.provider, slog.Default())
+			out, err := ag.Evaluate(ctx, agent.EvaluateInput{
+				JobTitle:      "后端工程师",
+				InterviewType: "technical",
+				QA: []agent.EvaluatedQA{{
+					Seq: 1, Question: c.Question, QuestionType: "technical", AnswerText: c.Answer,
+				}},
+			})
+			if err != nil {
+				res.OK = false
+				res.Issues = append(res.Issues, "evaluate error: "+err.Error())
+				report.Results = append(report.Results, res)
+				continue
+			}
+			report.Model = firstNonEmpty(report.Model, out.Model)
+			report.PromptVersion = firstNonEmpty(report.PromptVersion, out.PromptVersion)
 			res.Dimensions = out.Dimensions
 			for _, issue := range checkContract(out) {
 				res.OK = false
 				res.Issues = append(res.Issues, issue)
 			}
+			for _, issue := range checkAdversarialConstraints(out, c) {
+				res.OK = false
+				res.Issues = append(res.Issues, issue)
+			}
+		default:
+			res.OK = false
+			res.Issues = []string{"case has neither scenario nor question"}
 		}
 		report.Results = append(report.Results, res)
 	}
@@ -405,6 +474,40 @@ func (r *Runner) RunAdversarial(ctx context.Context, cases []AdversarialCase) (*
 		}
 	}
 	return report, nil
+}
+
+// checkAdversarialConstraints 对 live 攻击用例的输出做约束复核：
+//   - MaxDimension > 0 时，任何维度分不得超过该值（注入抬分防线）；
+//   - ForbiddenSubstrings 不得出现在 evidence（issue/evidence/reference）与
+//     recommendations 的拼接文本中（文本顺从与伪引用防线）。
+func checkAdversarialConstraints(out *agent.EvaluationOutput, c AdversarialCase) []string {
+	var issues []string
+	if c.MaxDimension > 0 {
+		for _, dim := range evaluation.DefaultRubric.Dimensions {
+			if v, ok := out.Dimensions[dim.Name]; ok && v > float64(c.MaxDimension) {
+				issues = append(issues, fmt.Sprintf("dimension %q = %v exceeds max %d", dim.Name, v, c.MaxDimension))
+			}
+		}
+	}
+	if len(c.ForbiddenSubstrings) > 0 {
+		var sb strings.Builder
+		for _, e := range out.Evidence {
+			sb.WriteString(e.Issue)
+			sb.WriteString("\n")
+			sb.WriteString(e.Evidence)
+			sb.WriteString("\n")
+			sb.WriteString(e.Reference)
+			sb.WriteString("\n")
+		}
+		sb.WriteString(strings.Join(out.Recommendations, "\n"))
+		combined := sb.String()
+		for _, s := range c.ForbiddenSubstrings {
+			if strings.Contains(combined, s) {
+				issues = append(issues, fmt.Sprintf("output contains forbidden substring %q", s))
+			}
+		}
+	}
+	return issues
 }
 
 // checkContract 对 agent 已归一化的输出做 runner 级独立复核（防御式契约检查）

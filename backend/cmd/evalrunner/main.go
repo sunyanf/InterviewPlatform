@@ -4,7 +4,8 @@
 //
 //	go run ./cmd/evalrunner
 //
-//	执行 golden 数据集结构化契约回归 + adversarial 契约异常回归 + answer_coach 契约回归。
+//	执行 golden 数据集结构化契约回归 + adversarial 契约异常与 live 攻击回归
+//	+ answer_coach 契约回归 + planner_guard 出题防护回归。
 //
 // 真实 Provider 评分一致性回归（阶段 B 配置密钥后）：
 //
@@ -12,9 +13,9 @@
 //	go run ./cmd/evalrunner -agreement -tolerance 15 -min-agreement 0.8 \
 //	  -out ../evals/results/evaluator-2026-09-16.json
 //
-// answer_coach 契约回归默认启用，传空串跳过：
+// answer_coach / planner_guard 契约回归默认启用，传空串跳过：
 //
-//	go run ./cmd/evalrunner -coach=""
+//	go run ./cmd/evalrunner -coach="" -planner-guard=""
 //
 // 退出码：0 全部通过；1 存在契约失败，或 agreement 模式一致率低于阈值；2 参数/初始化错误。
 package main
@@ -37,6 +38,7 @@ func main() {
 	goldenPath := flag.String("golden", filepath.Join("..", "evals", "datasets", "evaluator", "golden.jsonl"), "golden 数据集 JSONL 路径")
 	advPath := flag.String("adversarial", filepath.Join("..", "evals", "datasets", "evaluator", "adversarial.jsonl"), "adversarial 数据集 JSONL 路径")
 	coachPath := flag.String("coach", filepath.Join("..", "evals", "datasets", "answer_coach", "coach.jsonl"), "answer_coach 数据集 JSONL 路径（传空串跳过）")
+	plannerPath := flag.String("planner-guard", filepath.Join("..", "evals", "datasets", "planner_guard", "planner.jsonl"), "planner_guard 数据集 JSONL 路径（传空串跳过）")
 	out := flag.String("out", "", "报告 JSON 输出路径（可选）")
 	agreement := flag.Bool("agreement", false, "启用人工标注评分一致性对比（应配合真实 Provider）")
 	tolerance := flag.Float64("tolerance", 15, "单维度允许偏差（分）")
@@ -78,6 +80,14 @@ func main() {
 			os.Exit(2)
 		}
 	}
+	var plannerCases []evalrun.PlannerCase
+	if *plannerPath != "" {
+		plannerCases, err = evalrun.LoadPlanner(*plannerPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load planner guard: %v\n", err)
+			os.Exit(2)
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -104,17 +114,31 @@ func main() {
 			os.Exit(2)
 		}
 	}
+	var plannerReport *evalrun.Report
+	if len(plannerCases) > 0 {
+		plannerReport, err = runner.RunPlanner(ctx, plannerCases)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "run planner guard: %v\n", err)
+			os.Exit(2)
+		}
+	}
 
 	printReport(goldenReport)
 	printReport(advReport)
 	if coachReport != nil {
 		printReport(coachReport)
 	}
+	if plannerReport != nil {
+		printReport(plannerReport)
+	}
 
 	if *out != "" {
 		reports := []*evalrun.Report{goldenReport, advReport}
 		if coachReport != nil {
 			reports = append(reports, coachReport)
+		}
+		if plannerReport != nil {
+			reports = append(reports, plannerReport)
 		}
 		if err := writeReports(*out, reports...); err != nil {
 			fmt.Fprintf(os.Stderr, "write report: %v\n", err)
@@ -126,6 +150,9 @@ func main() {
 	failed := goldenReport.Failed + advReport.Failed
 	if coachReport != nil {
 		failed += coachReport.Failed
+	}
+	if plannerReport != nil {
+		failed += plannerReport.Failed
 	}
 	if *agreement && goldenReport.AgreementRate >= 0 && goldenReport.AgreementRate < *minAgreement {
 		fmt.Fprintf(os.Stderr, "\nagreement rate %.2f below threshold %.2f\n", goldenReport.AgreementRate, *minAgreement)

@@ -78,6 +78,9 @@ export default function RegisterPage() {
         <button className="btn btn-primary" disabled={busy} style={{ marginTop: 4 }}>
           {busy ? <span className="spinner" /> : '开始第一场模拟'}
         </button>
+        <p className="dim" style={{ fontSize: 12.5, textAlign: 'center', lineHeight: 1.7 }}>
+          注册即表示同意<Link to="/legal/terms">《用户协议》</Link>与<Link to="/legal/privacy">《隐私政策》</Link>
+        </p>
         <p className="dim" style={{ fontSize: 13.5, textAlign: 'center' }}>
           已有账号？<Link to="/login">直接登录</Link>
         </p>

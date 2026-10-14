@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { evaluationApi, interviewApi, reportApi } from '../api/endpoints'
 import { ApiError } from '../api/client'
 import { TaskFailedError, waitForTask } from '../api/taskPolling'
+import { DisclaimerNotice } from '../components/DisclaimerNotice'
 import type { Evaluation, InterviewSession, Question, Report } from '../api/types'
 
 type Phase = 'evaluating' | 'generating' | 'done' | 'error'
@@ -168,6 +169,10 @@ function ReportView({ report, evaluation, session }: { report: Report; evaluatio
           {evaluation.model} · prompt {evaluation.prompt_version}
         </div>
       </header>
+
+      <div style={{ marginBottom: 18 }}>
+        <DisclaimerNotice variant="compact" />
+      </div>
 
       {/* 总分卡 */}
       <section

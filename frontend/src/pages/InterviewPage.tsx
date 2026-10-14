@@ -4,6 +4,7 @@ import { interviewApi } from '../api/endpoints'
 import type { AnswerAnalysis, Question } from '../api/types'
 import { useInterviewSocket } from '../ws/useInterviewSocket'
 import { QTYPE_LABEL } from '../lib/display'
+import { DisclaimerNotice } from '../components/DisclaimerNotice'
 import { ChatPanel } from '../interview/ChatPanel'
 import { VoiceRecorder } from '../interview/VoiceRecorder'
 import { isAutoplayEnabled, speak, speechSupported, stopSpeaking } from '../interview/speech'
@@ -152,6 +153,9 @@ export default function InterviewPage() {
           }}
           busy={currentBusy}
         />
+        <div style={{ padding: '10px 34px', borderTop: '1px solid var(--line)' }}>
+          <DisclaimerNotice variant="compact" />
+        </div>
       </section>
 
       {/* 右：自由对话 */}

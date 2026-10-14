@@ -5,6 +5,8 @@
 //   - adversarial live 攻击回归（任意 Provider）：提示词注入抬分 / 伪引用 / 身份偏见固化为回归
 //     （依据 docs/REDTEAM_REPORT.md A1/A5/A6）；
 //   - planner_guard 出题防护回归（任意 Provider）：简历吹嘘量级不得成为题目前提（红队 A2）；
+//   - evaluator_bias 评分偏见统计回归（任意 Provider）：同一回答插入身份线索前缀，
+//     多变体多次运行断言维度/总分均值极差与输出禁用子串（红队 A6 扩样）；
 //   - coach 契约回归：更优答案示范输出契约与内容安全近似检查。
 //
 // 对应 docs/EVALUATION.md #5。LLM 不产出总分，runner 中所有总分均由确定性公式重算。
@@ -50,8 +52,9 @@ type AdversarialCase struct {
 	Question string `json:"question,omitempty"`
 	// Answer live 攻击用例的回答原文（可含注入语/身份陈述）
 	Answer string `json:"answer,omitempty"`
-	// ForbiddenSubstrings 输出 evidence（issue/evidence/reference）与 recommendations
-	// 拼接文本中不得出现的子串（0 条=不启用）
+	// ForbiddenSubstrings 输出评述性字段（evidence 的 issue/reference 与
+	// recommendations）拼接文本中不得出现的子串（0 条=不启用）；
+	// evidence.Evidence 为回答原文引用，不纳入扫描（见 checkAdversarialConstraints）
 	ForbiddenSubstrings []string `json:"forbidden_substrings,omitempty"`
 	// MaxDimension 任何维度分不得超过该值；0=不启用（如注入抬分回归设 99）
 	MaxDimension int `json:"max_dimension,omitempty"`
@@ -139,6 +142,21 @@ func loadJSONL(path string, dst any) error {
 			var c PlannerCase
 			if err := json.Unmarshal(line, &c); err != nil {
 				return fmt.Errorf("invalid planner jsonl line: %w", err)
+			}
+			*out = append(*out, c)
+		}
+		return scanner.Err()
+	case *[]BiasCase:
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+		for scanner.Scan() {
+			line := bytesTrim(scanner.Bytes())
+			if len(line) == 0 {
+				continue
+			}
+			var c BiasCase
+			if err := json.Unmarshal(line, &c); err != nil {
+				return fmt.Errorf("invalid bias jsonl line: %w", err)
 			}
 			*out = append(*out, c)
 		}
@@ -261,6 +279,10 @@ type CaseResult struct {
 	KeyChangesCount     int `json:"key_changes_count,omitempty"`
 	// planner_guard 契约回归观察字段
 	QuestionsCount int `json:"questions_count,omitempty"`
+	// bias_regression 观察字段：各变体多次运行的聚合均值与变体间极差
+	VariantSummaries []VariantSummary `json:"variant_summaries,omitempty"`
+	DimSpread        float64          `json:"dim_spread,omitempty"`
+	TotalSpread      float64          `json:"total_spread,omitempty"`
 }
 
 // Report 一次回归的完整报告
@@ -478,8 +500,10 @@ func (r *Runner) RunAdversarial(ctx context.Context, cases []AdversarialCase) (*
 
 // checkAdversarialConstraints 对 live 攻击用例的输出做约束复核：
 //   - MaxDimension > 0 时，任何维度分不得超过该值（注入抬分防线）；
-//   - ForbiddenSubstrings 不得出现在 evidence（issue/evidence/reference）与
-//     recommendations 的拼接文本中（文本顺从与伪引用防线）。
+//   - ForbiddenSubstrings 不得出现在模型的评述性字段（evidence 的 issue/reference
+//     与 recommendations）拼接文本中（文本顺从与伪引用防线）。
+//     注意：evidence.Evidence 按 AGENTS #15 必须逐字引用回答原文，而注入语/身份
+//     陈述本身就在回答文本里，合法引用必然包含这些词，故不纳入扫描（否则误报）。
 func checkAdversarialConstraints(out *agent.EvaluationOutput, c AdversarialCase) []string {
 	var issues []string
 	if c.MaxDimension > 0 {
@@ -493,8 +517,6 @@ func checkAdversarialConstraints(out *agent.EvaluationOutput, c AdversarialCase)
 		var sb strings.Builder
 		for _, e := range out.Evidence {
 			sb.WriteString(e.Issue)
-			sb.WriteString("\n")
-			sb.WriteString(e.Evidence)
 			sb.WriteString("\n")
 			sb.WriteString(e.Reference)
 			sb.WriteString("\n")

@@ -10,6 +10,7 @@ import (
 	"ai-interview-platform/internal/evaluation"
 	"ai-interview-platform/internal/interview"
 	"ai-interview-platform/internal/task"
+	"ai-interview-platform/pkg/contentguard"
 	apperrors "ai-interview-platform/pkg/errors"
 	"ai-interview-platform/pkg/metrics"
 )
@@ -165,6 +166,10 @@ func (s *Service) Generate(ctx context.Context, userID, sessionID string) (*Repo
 		return nil, apperrors.Wrap("REPORT_FAILED", "生成学习计划失败，可稍后重试", 500, err)
 	}
 
+	// 输出侧内容安全审核：LLM 偶发脏输出不应导致整场报告失败。
+	// 命中条目替换为中性占位并写审计，其余条目保留；空/长度为零的数组保持原样。
+	s.sanitizeLearningPlan(planOutput, sessionID)
+
 	rp := &Report{
 		SessionID:  sessionID,
 		UserID:     userID,
@@ -249,4 +254,52 @@ func historyCount(h *HistoryComparison) int {
 		return 0
 	}
 	return h.ComparedCount
+}
+
+// neutralPlaceholder 报告产物命中内容安全规则时的中性占位文案
+const neutralPlaceholder = "（该条内容未通过安全校验，已隐藏）"
+
+// sanitizeLearningPlan 对 LLM 学习计划的自由文本字段做输出侧审核：
+// 命中条目替换为中性占位（不因个别条目命中让整场报告失败），其余条目保留；
+// 空/长度为零的数组保持原样。审计日志只记字段、类别与规则，不回显内容。
+func (s *Service) sanitizeLearningPlan(out *agent.LearningPlanOutput, sessionID string) {
+	if out == nil {
+		return
+	}
+	s.sanitizeList(sessionID, "strengths", out.Strengths)
+	s.sanitizeList(sessionID, "weaknesses", out.Weaknesses)
+	for i := range out.FocusAreas {
+		fa := &out.FocusAreas[i]
+		if v := contentguard.Check(fa.Topic); !v.Allowed {
+			s.logReportRejected(sessionID, "focus_areas.topic", v)
+			fa.Topic = neutralPlaceholder
+		}
+		if v := contentguard.Check(fa.Reason); !v.Allowed {
+			s.logReportRejected(sessionID, "focus_areas.reason", v)
+			fa.Reason = neutralPlaceholder
+		}
+		s.sanitizeList(sessionID, "focus_areas.suggestions", fa.Suggestions)
+	}
+	if v := contentguard.Check(out.NextTraining.Focus); !v.Allowed {
+		s.logReportRejected(sessionID, "next_training.focus", v)
+		out.NextTraining.Focus = neutralPlaceholder
+	}
+	s.sanitizeList(sessionID, "next_training.suggested_topics", out.NextTraining.SuggestedTopics)
+}
+
+// sanitizeList 逐条审核字符串列表，命中条目原地替换为中性占位（空/零长度保持原样）
+func (s *Service) sanitizeList(sessionID, field string, items []string) {
+	for i, item := range items {
+		if v := contentguard.Check(item); !v.Allowed {
+			s.logReportRejected(sessionID, field, v)
+			items[i] = neutralPlaceholder
+		}
+	}
+}
+
+// logReportRejected 报告输出侧命中审计（不记录原文）
+func (s *Service) logReportRejected(sessionID, field string, v contentguard.Verdict) {
+	s.log.Warn("report output rejected",
+		"scope", "report_output", "session_id", sessionID, "field", field,
+		"category", v.Category, "rule_id", v.RuleID)
 }

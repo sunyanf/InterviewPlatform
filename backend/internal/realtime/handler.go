@@ -16,6 +16,7 @@ import (
 	"ai-interview-platform/internal/agent"
 	"ai-interview-platform/internal/interview"
 	ttssvc "ai-interview-platform/internal/tts"
+	"ai-interview-platform/pkg/contentguard"
 	apperrors "ai-interview-platform/pkg/errors"
 	"ai-interview-platform/pkg/jwt"
 	"ai-interview-platform/pkg/llm"
@@ -266,6 +267,17 @@ func (h *Handler) handleChat(ctx context.Context, c *Client, sess *interview.Ses
 		return c.sendFrame(marshalEvent(typeError, ErrorData{Code: "MESSAGE_TOO_LONG", Message: "对话内容超过长度限制"}))
 	}
 
+	// 输入侧内容安全审核：命中即拒绝，不进入 LLM 流式调用。日志只记类别与规则，不回显对话原文。
+	if v := contentguard.Check(msg.Message); !v.Allowed {
+		h.log.Warn("realtime chat input rejected",
+			"scope", "chat_input", "session_id", sess.ID,
+			"category", v.Category, "rule_id", v.RuleID, "text_runes", msgLen)
+		return c.sendFrame(marshalEvent(typeError, ErrorData{
+			Code:    "CONTENT_REJECTED",
+			Message: "对话内容包含" + contentguard.CategoryLabel(v.Category) + "，请修改后重新发送",
+		}))
+	}
+
 	history := make([]llm.Message, 0, len(msg.History))
 	for _, t := range msg.History {
 		history = append(history, llm.Message{Role: t.Role, Content: t.Content})
@@ -300,6 +312,18 @@ func (h *Handler) handleChat(ctx context.Context, c *Client, sess *interview.Ses
 			return c.sendFrame(marshalEvent(typeError, ErrorData{Code: "LLM_STREAM_ERROR", Message: "实时对话生成失败"}))
 		}
 		replyBuilder.WriteString(ev.Delta)
+		// 输出侧内容安全审核：对累计回复文本做审核，命中即中断本轮（跳过 TTS 与 chat_done）。
+		// 已知限制：已推送的增量无法撤回，客户端可能已渲染部分内容；中断保证不再继续输出违规内容。
+		if v := contentguard.Check(replyBuilder.String()); !v.Allowed {
+			h.log.Warn("realtime chat output rejected",
+				"scope", "chat_output", "session_id", sess.ID,
+				"category", v.Category, "rule_id", v.RuleID, "reply_runes", replyBuilder.Len())
+			cancel()
+			return c.sendFrame(marshalEvent(typeError, ErrorData{
+				Code:    "CONTENT_REJECTED",
+				Message: "实时回复未通过内容安全校验，已中断",
+			}))
+		}
 		if !c.sendFrame(marshalEvent(typeChatDelta, ChatDeltaData{Delta: ev.Delta})) {
 			cancel()
 			return false

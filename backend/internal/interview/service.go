@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"ai-interview-platform/internal/agent"
 	"ai-interview-platform/internal/job"
 	"ai-interview-platform/internal/resume"
+	"ai-interview-platform/pkg/contentguard"
 	apperrors "ai-interview-platform/pkg/errors"
 	"ai-interview-platform/pkg/metrics"
 )
@@ -36,9 +38,26 @@ type KnowledgeRetriever interface {
 	RetrieveForQuery(ctx context.Context, query string, topK int) ([]KnowledgeSnippet, error)
 }
 
+// interviewRepo 面试数据访问能力（*Repository 实现；测试可用 fake 替换）
+type interviewRepo interface {
+	Create(ctx context.Context, s *Session) error
+	GetByID(ctx context.Context, id string) (*Session, error)
+	ListByUserID(ctx context.Context, userID string) ([]Session, error)
+	UpdateStatus(ctx context.Context, id, status string, startedAt, endedAt *time.Time) error
+	GetJobTitle(ctx context.Context, jobID string) (string, error)
+	CreateQuestions(ctx context.Context, sessionID string, questions []Question) error
+	GetMaxSeq(ctx context.Context, sessionID string) (int, error)
+	UpdateSessionMetadata(ctx context.Context, id string, metadata map[string]interface{}) error
+	UpdateAnswerAnalysis(ctx context.Context, answerID string, analysis any) error
+	ListQuestionsBySession(ctx context.Context, sessionID string) ([]Question, error)
+	GetQuestionByID(ctx context.Context, id string) (*Question, error)
+	CreateAnswer(ctx context.Context, a *Answer) error
+	CountAnswered(ctx context.Context, sessionID string) (int, error)
+}
+
 // Service 面试业务逻辑层
 type Service struct {
-	repo      *Repository
+	repo      interviewRepo
 	jobRepo   *job.Repository
 	resumeSvc *resume.Service
 	agent     AgentService
@@ -328,6 +347,17 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID, sessionID string, re
 	}
 	if strings.TrimSpace(req.TextContent) == "" {
 		return nil, apperrors.New("EMPTY_ANSWER", "回答内容不能为空", 400)
+	}
+
+	// 输入侧内容安全审核：命中即拒绝，且必须在落库（CreateAnswer）之前。
+	// SubmitAnswer 是 HTTP 与 WebSocket 共用的唯一落库入口，WS 侧不再重复判定。
+	// 日志只记类别与规则，不回显回答原文。
+	if v := contentguard.Check(req.TextContent); !v.Allowed {
+		s.log.Warn("answer content rejected",
+			"scope", "answer_submit", "session_id", sess.ID,
+			"category", v.Category, "rule_id", v.RuleID, "text_runes", utf8.RuneCountInString(req.TextContent))
+		return nil, apperrors.New("CONTENT_REJECTED",
+			fmt.Sprintf("回答包含%s内容，请修改后重新提交", contentguard.CategoryLabel(v.Category)), 400)
 	}
 
 	// 问题必须属于该会话

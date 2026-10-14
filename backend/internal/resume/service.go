@@ -8,11 +8,13 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"ai-interview-platform/internal/job"
 	"ai-interview-platform/internal/task"
+	"ai-interview-platform/pkg/contentguard"
 	apperrors "ai-interview-platform/pkg/errors"
 	"ai-interview-platform/pkg/llm"
 	"ai-interview-platform/pkg/promptguard"
@@ -33,9 +35,18 @@ type taskEnqueuer interface {
 	Enqueue(ctx context.Context, req task.EnqueueRequest) (*task.Task, bool, error)
 }
 
+// resumeRepo 简历数据访问能力（*Repository 实现；测试可用 fake 替换）
+type resumeRepo interface {
+	Create(ctx context.Context, rs *Resume) error
+	GetByID(ctx context.Context, id string) (*Resume, error)
+	ListByUserID(ctx context.Context, userID string) ([]Resume, error)
+	UpdateParseResult(ctx context.Context, id, parsedContent string, structuredData any, skills []string, status string) error
+	UpdateStatus(ctx context.Context, id, status string) error
+}
+
 // Service 简历业务逻辑层
 type Service struct {
-	repo    *Repository
+	repo    resumeRepo
 	storage storage.Storage
 	llm     llm.Provider
 	jobRepo *job.Repository
@@ -56,6 +67,9 @@ func NewService(repo *Repository, st storage.Storage, llmProv llm.Provider, jobR
 }
 
 const maxFileSize = 10 * 1024 * 1024 // 10MB
+
+// resumeContentMaxRunes 简历正文内容审核的长度上限（简历较长，放宽至 5 万字符）
+const resumeContentMaxRunes = 50000
 
 var allowedFileTypes = map[string]bool{
 	".txt":  true,
@@ -173,6 +187,17 @@ func (s *Service) Parse(ctx context.Context, resumeID string) (*Resume, error) {
 	if strings.TrimSpace(text) == "" {
 		_ = s.repo.UpdateParseResult(ctx, resumeID, "", nil, []string{}, StatusFailed)
 		return nil, apperrors.New("EMPTY_CONTENT", "简历内容为空或无法提取", 400)
+	}
+
+	// 输入侧内容安全审核：命中即拒绝，并置解析失败（与既有失败路径一致）。
+	// 简历正文较长，使用放宽的长度上限；日志只记类别与规则，不回显简历原文。
+	if v := contentguard.CheckLimited(text, resumeContentMaxRunes); !v.Allowed {
+		s.log.Warn("resume content rejected",
+			"scope", "resume_parse", "resume_id", resumeID,
+			"category", v.Category, "rule_id", v.RuleID, "text_runes", utf8.RuneCountInString(text))
+		_ = s.repo.UpdateParseResult(ctx, resumeID, "", nil, []string{}, StatusFailed)
+		return nil, apperrors.New("CONTENT_REJECTED",
+			fmt.Sprintf("简历包含%s内容，无法解析，请修改后重新上传", contentguard.CategoryLabel(v.Category)), 400)
 	}
 
 	// 调用 LLM 结构化解析

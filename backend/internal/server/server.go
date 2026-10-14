@@ -265,11 +265,10 @@ func (s *Server) routes() http.Handler {
 			r.Get("/interviews/{id}/speech/opening", s.ttsHandler().Opening)
 			r.Get("/interviews/{id}/questions/{questionID}/speech", s.ttsHandler().Question)
 
-			// 知识库（RAG）
-			r.Post("/knowledge/documents", s.knowledgeHandler().Create)
+			// 知识库（RAG）：登录用户仅可检索/查看；写与删移至 admin 组，
+			// 防止普通用户投毒或删除进入全员出题/评估链路的全局知识
 			r.Get("/knowledge/documents", s.knowledgeHandler().List)
 			r.Get("/knowledge/documents/{id}", s.knowledgeHandler().Get)
-			r.Delete("/knowledge/documents/{id}", s.knowledgeHandler().Delete)
 			r.Post("/knowledge/search", s.knowledgeHandler().Search)
 
 			// 评估
@@ -301,6 +300,10 @@ func (s *Server) routes() http.Handler {
 			r.Patch("/admin/settings", s.adminHandler().UpdateSettings)
 			r.Get("/admin/users", s.adminHandler().ListUsers)
 			r.Patch("/admin/users/{id}", s.adminHandler().UpdateUser)
+
+			// 知识库写操作（全局 RAG 数据，仅管理员）：摄取 CLI 直连 service 不受路由限制
+			r.Post("/knowledge/documents", s.knowledgeHandler().Create)
+			r.Delete("/knowledge/documents/{id}", s.knowledgeHandler().Delete)
 		})
 	})
 

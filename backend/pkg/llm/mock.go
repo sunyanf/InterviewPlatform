@@ -182,6 +182,25 @@ func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse
 		}, nil
 	}
 
+	// 更优答案示范 mock 输出（interview.answer_coach.v1；注意：coach prompt 含"面试题"字样，
+	// 本分支必须在出题检测之前）
+	if contains(lastMsg, "回答改良示范") {
+		mockCoach := map[string]interface{}{
+			"improved_answer": "我会先用一句话给出结论，再分三点展开。第一，说明核心概念的定义与边界，确保面试官清楚我理解准确；第二，结合一个通用的项目场景，说明这个知识点在实际开发中如何落地，包括当时遇到的典型问题与取舍；第三，补充常见的坑和排查手段，体现工程实践深度。最后用一句话总结要点，并主动延伸到相关主题，展示知识面的广度。整段回答保持先结论后展开的结构，用语简洁，不堆砌术语。",
+			"key_changes": []string{
+				"先给结论再分点展开，结构更清晰，便于面试官跟随思路",
+				"补充了实际场景与常见坑的说明，相比原回答更完整、更有工程深度",
+			},
+		}
+		data, _ := json.Marshal(mockCoach)
+		return &ChatResponse{
+			Content:      string(data),
+			Model:        "mock",
+			InputTokens:  120,
+			OutputTokens: 200,
+		}, nil
+	}
+
 	// 面试开场白 mock 输出（注意：必须在面试官/面试题检测之前）
 	if contains(lastMsg, "面试开场白") {
 		return &ChatResponse{

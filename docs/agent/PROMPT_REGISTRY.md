@@ -98,6 +98,16 @@ Eval：本次未改变评分逻辑与输出 Schema，因此未重跑 Eval Datase
       产出的是「改良示范」而非标准答案；不得虚构候选人的具体经历、公司、项目或数字；
       输出侧经 contentguard 审核，命中条目替换为中性占位并留审计（不回显原文）。
 风险：LLM 可能过度发挥或输出越界内容 → 由 system 约束 + Schema/业务校验 + 输出侧内容安全共同兜底。
-Eval Dataset：新增 Prompt，暂无对应 Eval 用例；后续接入 Eval 时需补充「示范质量」与「不虚构候选人经历」一致性用例。
+Eval Dataset：evals/datasets/answer_coach/coach.jsonl（5 例：Go channel 关闭语义 / goroutine 泄漏排查 /
+      MySQL 索引失效 / Redis 缓存击穿 / 行为题团队意见冲突；每例含 3-5 条 expected_points、
+      中等质量候选回答、forbidden_substrings 防「虚构候选人公司经历」近似检查）。
+      回归入口：evalrun.RunCoach（mode=coach_contract，backend/internal/evalrun/coach.go），
+      检查 improved_answer 非空且 ≤2000 rune、key_changes 0..4 条、prompt 版本、model 非空、
+      禁用子串与 untrusted_ 数据区标签不泄漏进产物。
+Eval 结果：2026-10-14 全部通过。mock（CI 默认）5/5；真实 DeepSeek（provider=openai-compatible，
+      model=deepseek-chat）5/5，improved_answer 333-443 rune、key_changes 均为 4 条
+      （详见 evals/results/answer-coach-2026-10-14.json）。
+运行命令：cd backend; go run ./cmd/evalrunner（mock）；真实 Provider 时直接
+      go run ./cmd/evalrunner -out ../evals/results/<date>.json（config.Load 自动读 backend/.env）。
 变更记录：2026-10-14 新增 v1。
 ```

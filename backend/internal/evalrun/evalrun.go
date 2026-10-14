@@ -97,6 +97,21 @@ func loadJSONL(path string, dst any) error {
 			*out = append(*out, c)
 		}
 		return scanner.Err()
+	case *[]CoachCase:
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+		for scanner.Scan() {
+			line := bytesTrim(scanner.Bytes())
+			if len(line) == 0 {
+				continue
+			}
+			var c CoachCase
+			if err := json.Unmarshal(line, &c); err != nil {
+				return fmt.Errorf("invalid coach jsonl line: %w", err)
+			}
+			*out = append(*out, c)
+		}
+		return scanner.Err()
 	default:
 		return fmt.Errorf("loadJSONL: unsupported destination type %T", dst)
 	}
@@ -210,6 +225,9 @@ type CaseResult struct {
 	ExpectedTotal   float64            `json:"expected_total,omitempty"`
 	WithinTolerance bool               `json:"within_tolerance,omitempty"`
 	DimMAE          float64            `json:"dim_mae,omitempty"`
+	// coach 契约回归观察字段（只记量纲，不落全文）
+	ImprovedAnswerRunes int `json:"improved_answer_runes,omitempty"`
+	KeyChangesCount     int `json:"key_changes_count,omitempty"`
 }
 
 // Report 一次回归的完整报告

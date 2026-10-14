@@ -24,6 +24,7 @@ type AgentService interface {
 	AnalyzeAnswer(ctx context.Context, in agent.AnalyzeAnswerInput) (*agent.AnswerAnalysis, error)
 	DecideFollowUp(ctx context.Context, in agent.FollowUpInput) (*agent.FollowUpDecision, error)
 	OpeningMessage(ctx context.Context, in agent.OpeningInput) (string, error)
+	CoachAnswer(ctx context.Context, in agent.AnswerCoachInput) (*agent.AnswerCoaching, error)
 }
 
 // KnowledgeSnippet 出题用的知识片段（RAG 检索召回）
@@ -474,6 +475,107 @@ func (s *Service) Finish(ctx context.Context, userID, sessionID string) (*Sessio
 	sess.EndedAt = &now
 	metrics.InterviewsCompleted.Inc()
 	return sess, nil
+}
+
+// CoachQuestion 生成某道题的「更优答案示范」（仅已结束的面试可用）
+// 校验顺序：归属 → 会话已结束 → 题目属于该会话 → 该题已作答；
+// Agent 只产示范文本，不计算分数、不改变任何状态（AGENTS.md #9、#10）。
+func (s *Service) CoachQuestion(ctx context.Context, userID, sessionID, questionID string) (*agent.AnswerCoaching, error) {
+	if userID == "" || sessionID == "" || questionID == "" {
+		return nil, apperrors.ErrBadRequest
+	}
+
+	sess, err := s.getOwnedSession(ctx, userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 只有已结束（COMPLETED）的面试才能生成示范答案
+	if sess.Status != StatusCompleted {
+		return nil, apperrors.New("SESSION_NOT_COMPLETED", "面试尚未结束，暂不能生成示范答案", 400)
+	}
+
+	q, err := s.findQuestionWithAnswer(ctx, sessionID, questionID)
+	if err != nil {
+		return nil, err
+	}
+	if q == nil {
+		return nil, apperrors.New("QUESTION_NOT_IN_SESSION", "题目不属于该场面试", 400)
+	}
+
+	// 未作答的题目无法对照生成示范
+	if q.Answer == nil || strings.TrimSpace(q.Answer.TextContent) == "" {
+		return nil, apperrors.New("ANSWER_REQUIRED", "该题尚未作答，无法生成示范答案", 400)
+	}
+
+	jobTitle, err := s.repo.GetJobTitle(ctx, sess.JobID)
+	if err != nil {
+		return nil, apperrors.Wrap("INTERNAL_ERROR", "查询岗位失败", 500, err)
+	}
+
+	coaching, err := s.agent.CoachAnswer(ctx, agent.AnswerCoachInput{
+		JobTitle:       jobTitle,
+		Question:       q.Question,
+		ExpectedPoints: q.ExpectedPoints,
+		AnswerText:     q.Answer.TextContent,
+		Difficulty:     q.Difficulty,
+		Analysis:       q.Answer.Analysis,
+	})
+	if err != nil {
+		metrics.AgentFailures.Inc("coach_answer")
+		s.log.Error("agent coach answer failed", "session_id", sessionID, "question_id", questionID, "error", err)
+		return nil, apperrors.New("COACHING_FAILED", "示范答案生成失败，请稍后重试", 500)
+	}
+
+	// 输出侧内容安全审核：命中条目替换为中性占位（不因个别条目命中让整次生成失败）
+	s.sanitizeCoaching(coaching, sessionID)
+
+	return coaching, nil
+}
+
+// findQuestionWithAnswer 在指定会话的问题列表中定位目标问题（含回答）。
+// 现状适配：Repository.GetQuestionByID 只查问题表、不返回回答，故改用
+// ListQuestionsBySession（该查询已 LEFT JOIN 回答并按会话过滤），
+// 在会话范围内定位问题即天然完成「题目属于该场面试」的校验。
+func (s *Service) findQuestionWithAnswer(ctx context.Context, sessionID, questionID string) (*Question, error) {
+	questions, err := s.repo.ListQuestionsBySession(ctx, sessionID)
+	if err != nil {
+		return nil, apperrors.Wrap("INTERNAL_ERROR", "查询问题失败", 500, err)
+	}
+	for i := range questions {
+		if questions[i].ID == questionID {
+			return &questions[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// coachNeutralPlaceholder 示范答案命中内容安全规则时的中性占位文案
+const coachNeutralPlaceholder = "（该内容未通过安全校验，已隐藏）"
+
+// sanitizeCoaching 对示范答案的自由文本字段做输出侧审核：
+// 命中条目原地替换为中性占位；审计日志只记类别与规则，不回显原文（AGENTS.md #11、#17）。
+func (s *Service) sanitizeCoaching(c *agent.AnswerCoaching, sessionID string) {
+	if c == nil {
+		return
+	}
+	if v := contentguard.Check(c.ImprovedAnswer); !v.Allowed {
+		s.logCoachingRejected(sessionID, "improved_answer", c.ImprovedAnswer, v)
+		c.ImprovedAnswer = coachNeutralPlaceholder
+	}
+	for i, item := range c.KeyChanges {
+		if v := contentguard.Check(item); !v.Allowed {
+			s.logCoachingRejected(sessionID, "key_changes", item, v)
+			c.KeyChanges[i] = coachNeutralPlaceholder
+		}
+	}
+}
+
+// logCoachingRejected 示范答案输出侧命中审计（不记录原文，仅记字数）
+func (s *Service) logCoachingRejected(sessionID, field, text string, v contentguard.Verdict) {
+	s.log.Warn("coach output rejected",
+		"scope", "coach_output", "session_id", sessionID, "field", field,
+		"category", v.Category, "rule_id", v.RuleID, "text_runes", utf8.RuneCountInString(text))
 }
 
 // getOwnedSession 查询会话并校验归属

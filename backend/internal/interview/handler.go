@@ -114,3 +114,18 @@ func (h *Handler) Finish(w http.ResponseWriter, r *http.Request) {
 
 	response.Success(w, sess)
 }
+
+// Coach 生成某道题的更优答案示范
+func (h *Handler) Coach(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r.Context())
+	id := chi.URLParam(r, "id")
+	questionID := chi.URLParam(r, "questionID")
+
+	coaching, err := h.svc.CoachQuestion(r.Context(), userID, id, questionID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+
+	response.Success(w, coaching)
+}

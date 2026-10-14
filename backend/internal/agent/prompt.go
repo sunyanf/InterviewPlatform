@@ -80,6 +80,15 @@ const (
 	// 系统约束：只产定性建议，不计算分数；日志不输出转写原文（AGENTS.md #17）
 	// v2 变更：问题与转写文本改为 <untrusted_*> 标签包裹（P0-5）
 	PromptSpeechAnalyzer = "audio.speech_analyzer.v2"
+
+	// PromptAnswerCoach 更优答案示范
+	// 用途：针对某道面试题，基于问题与参考要点组织一份「回答改良示范」，并说明相比原回答的改进点
+	// 输入：岗位标题、问题、参考答案要点、候选人原回答、难度、可选回答分析（命中/遗漏/错误要点）
+	// 输出 Schema：{"improved_answer":"","key_changes":[""]}
+	// 系统约束：只产示范文本与改进建议，不计算分数、不改变任何会话状态；
+	// 产出的是「改良示范」而非标准答案，不得虚构候选人的具体经历、公司、项目或数字；
+	// 岗位/问题/参考要点/原回答/分析均以 <untrusted_*> 标签包裹为数据区（P0-5）
+	PromptAnswerCoach = "interview.answer_coach.v1"
 )
 
 // buildSystemPrompt 构造带版本号与不可信内容隔离声明的 system prompt。

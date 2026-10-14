@@ -4,7 +4,7 @@ import { evaluationApi, interviewApi, reportApi } from '../api/endpoints'
 import { ApiError } from '../api/client'
 import { TaskFailedError, waitForTask } from '../api/taskPolling'
 import { DisclaimerNotice } from '../components/DisclaimerNotice'
-import type { Evaluation, InterviewSession, Question, Report } from '../api/types'
+import type { AnswerCoaching, Evaluation, InterviewSession, Question, Report } from '../api/types'
 
 type Phase = 'evaluating' | 'generating' | 'done' | 'error'
 
@@ -414,6 +414,25 @@ function QuestionItem({ q }: { q: Question }) {
   const wrong = analysis?.wrong_points ?? []
   const hasGap = correct.length > 0 || missing.length > 0 || wrong.length > 0
 
+  // 更优答案示范：仅当该题已作答时可用
+  const answered = !!q.answer && q.answer.text_content.trim() !== ''
+  const [coachPhase, setCoachPhase] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
+  const [coaching, setCoaching] = useState<AnswerCoaching | null>(null)
+  const [coachError, setCoachError] = useState('')
+
+  const requestCoach = async () => {
+    setCoachPhase('loading')
+    setCoachError('')
+    try {
+      const result = await interviewApi.coach(q.session_id, q.id)
+      setCoaching(result)
+      setCoachPhase('done')
+    } catch (err) {
+      setCoachError(err instanceof ApiError ? err.message : '生成失败，请稍后重试')
+      setCoachPhase('error')
+    }
+  }
+
   return (
     <details style={{ borderLeft: '2px solid var(--line-strong)', padding: '6px 0 6px 16px' }}>
       <summary style={{ cursor: 'pointer', fontSize: 14, lineHeight: 1.7 }}>
@@ -451,6 +470,45 @@ function QuestionItem({ q }: { q: Question }) {
             <GapGroup tone="jade" label="✓ 命中" points={correct} />
             <GapGroup tone="accent" label="! 遗漏" points={missing} />
             <GapGroup tone="clay" label="× 错误" points={wrong} />
+          </div>
+        )}
+
+        {answered && (
+          <div>
+            {coachPhase !== 'done' && (
+              <button
+                className="btn btn-ghost"
+                onClick={requestCoach}
+                disabled={coachPhase === 'loading'}
+                style={{ fontSize: 13, padding: '6px 14px' }}
+              >
+                {coachPhase === 'loading' ? '生成中…' : coachPhase === 'error' ? '重试' : '生成更优答案示范'}
+              </button>
+            )}
+            {coachPhase === 'error' && (
+              <p style={{ color: 'var(--clay)', fontSize: 13, marginTop: 8 }}>{coachError}</p>
+            )}
+            {coachPhase === 'done' && coaching && (
+              <div
+                className="card"
+                style={{ padding: '16px 18px', background: 'var(--accent-soft)', border: '1px solid var(--line)' }}
+              >
+                <div className="mono dim" style={{ fontSize: 11, letterSpacing: '0.2em', marginBottom: 8 }}>
+                  IMPROVED ANSWER · 更优答案示范
+                </div>
+                <p style={{ fontSize: 14, lineHeight: 1.9, whiteSpace: 'pre-wrap' }}>{coaching.improved_answer}</p>
+                {coaching.key_changes.length > 0 && (
+                  <ul style={{ margin: '10px 0 0 18px', lineHeight: 1.8, fontSize: 13.5 }}>
+                    {coaching.key_changes.map((c, i) => (
+                      <li key={i}>{c}</li>
+                    ))}
+                  </ul>
+                )}
+                <p className="dim" style={{ fontSize: 12, marginTop: 10 }}>
+                  AI 生成的示范答案，非标准答案，仅供参考。
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>

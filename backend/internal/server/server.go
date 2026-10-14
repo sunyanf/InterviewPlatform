@@ -265,6 +265,9 @@ func (s *Server) routes() http.Handler {
 			r.Get("/interviews/{id}/speech/opening", s.ttsHandler().Opening)
 			r.Get("/interviews/{id}/questions/{questionID}/speech", s.ttsHandler().Question)
 
+			// 更优答案示范（仅已结束的面试可用）
+			r.Post("/interviews/{id}/questions/{questionID}/coaching", s.interviewHandler().Coach)
+
 			// 知识库（RAG）：登录用户仅可检索/查看；写与删移至 admin 组，
 			// 防止普通用户投毒或删除进入全员出题/评估链路的全局知识
 			r.Get("/knowledge/documents", s.knowledgeHandler().List)

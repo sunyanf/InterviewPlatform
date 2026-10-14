@@ -182,6 +182,14 @@ export interface SubmitAnswerResult {
   follow_up?: Question
 }
 
+// 更优答案示范（interview.answer_coach.v1）
+export interface AnswerCoaching {
+  improved_answer: string
+  key_changes: string[]
+  prompt_version: string
+  model: string
+}
+
 // ---------- evaluation ----------
 export interface EvidenceItem {
   question_seq: number

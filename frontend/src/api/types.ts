@@ -146,6 +146,8 @@ export interface Question {
   answered: boolean
   answer_id?: string
   answer?: Answer
+  // 已持久化的更优答案示范（报告预生成或此前点击生成后返回）
+  coaching?: AnswerCoaching
 }
 
 export interface InterviewSession {

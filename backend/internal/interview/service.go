@@ -54,6 +54,8 @@ type interviewRepo interface {
 	GetQuestionByID(ctx context.Context, id string) (*Question, error)
 	CreateAnswer(ctx context.Context, a *Answer) error
 	CountAnswered(ctx context.Context, sessionID string) (int, error)
+	GetCoachingByQuestionID(ctx context.Context, questionID string) (*agent.AnswerCoaching, error)
+	UpsertCoaching(ctx context.Context, sessionID, questionID string, c *agent.AnswerCoaching) error
 }
 
 // Service 面试业务逻辑层
@@ -479,6 +481,8 @@ func (s *Service) Finish(ctx context.Context, userID, sessionID string) (*Sessio
 
 // CoachQuestion 生成某道题的「更优答案示范」（仅已结束的面试可用）
 // 校验顺序：归属 → 会话已结束 → 题目属于该会话 → 该题已作答；
+// 命中持久化缓存直接返回（答案不可变，示范结果永不过期，不再调 LLM）；
+// 未命中 → 生成 → 审核 → 落库。
 // Agent 只产示范文本，不计算分数、不改变任何状态（AGENTS.md #9、#10）。
 func (s *Service) CoachQuestion(ctx context.Context, userID, sessionID, questionID string) (*agent.AnswerCoaching, error) {
 	if userID == "" || sessionID == "" || questionID == "" {
@@ -508,6 +512,16 @@ func (s *Service) CoachQuestion(ctx context.Context, userID, sessionID, question
 		return nil, apperrors.New("ANSWER_REQUIRED", "该题尚未作答，无法生成示范答案", 400)
 	}
 
+	// 缓存命中：持久化的示范结果直接返回，不再调用 LLM（节省成本与延迟）
+	cached, err := s.repo.GetCoachingByQuestionID(ctx, questionID)
+	if err != nil {
+		s.log.Error("get coaching failed", "session_id", sessionID, "question_id", questionID, "error", err)
+		return nil, apperrors.Wrap("INTERNAL_ERROR", "查询示范答案失败", 500, err)
+	}
+	if cached != nil {
+		return cached, nil
+	}
+
 	jobTitle, err := s.repo.GetJobTitle(ctx, sess.JobID)
 	if err != nil {
 		return nil, apperrors.Wrap("INTERNAL_ERROR", "查询岗位失败", 500, err)
@@ -528,7 +542,13 @@ func (s *Service) CoachQuestion(ctx context.Context, userID, sessionID, question
 	}
 
 	// 输出侧内容安全审核：命中条目替换为中性占位（不因个别条目命中让整次生成失败）
-	s.sanitizeCoaching(coaching, sessionID)
+	SanitizeCoaching(coaching, sessionID, s.log)
+
+	// 落库供后续请求与报告预生成复用；失败则本次不返回结果，用户下次点击重试
+	if err := s.repo.UpsertCoaching(ctx, sessionID, questionID, coaching); err != nil {
+		s.log.Error("save coaching failed", "session_id", sessionID, "question_id", questionID, "error", err)
+		return nil, apperrors.Wrap("INTERNAL_ERROR", "保存示范答案失败", 500, err)
+	}
 
 	return coaching, nil
 }
@@ -553,27 +573,32 @@ func (s *Service) findQuestionWithAnswer(ctx context.Context, sessionID, questio
 // coachNeutralPlaceholder 示范答案命中内容安全规则时的中性占位文案
 const coachNeutralPlaceholder = "（该内容未通过安全校验，已隐藏）"
 
-// sanitizeCoaching 对示范答案的自由文本字段做输出侧审核：
+// SanitizeCoaching 对示范答案的自由文本字段做输出侧审核（包级导出，供 report 层预生成复用）：
 // 命中条目原地替换为中性占位；审计日志只记类别与规则，不回显原文（AGENTS.md #11、#17）。
-func (s *Service) sanitizeCoaching(c *agent.AnswerCoaching, sessionID string) {
+func SanitizeCoaching(c *agent.AnswerCoaching, sessionID string, log *slog.Logger) {
 	if c == nil {
 		return
 	}
 	if v := contentguard.Check(c.ImprovedAnswer); !v.Allowed {
-		s.logCoachingRejected(sessionID, "improved_answer", c.ImprovedAnswer, v)
+		logCoachingRejected(log, sessionID, "improved_answer", c.ImprovedAnswer, v)
 		c.ImprovedAnswer = coachNeutralPlaceholder
 	}
 	for i, item := range c.KeyChanges {
 		if v := contentguard.Check(item); !v.Allowed {
-			s.logCoachingRejected(sessionID, "key_changes", item, v)
+			logCoachingRejected(log, sessionID, "key_changes", item, v)
 			c.KeyChanges[i] = coachNeutralPlaceholder
 		}
 	}
 }
 
+// sanitizeCoaching Service 方法形式的委托（保留调用点兼容，行为不变）
+func (s *Service) sanitizeCoaching(c *agent.AnswerCoaching, sessionID string) {
+	SanitizeCoaching(c, sessionID, s.log)
+}
+
 // logCoachingRejected 示范答案输出侧命中审计（不记录原文，仅记字数）
-func (s *Service) logCoachingRejected(sessionID, field, text string, v contentguard.Verdict) {
-	s.log.Warn("coach output rejected",
+func logCoachingRejected(log *slog.Logger, sessionID, field, text string, v contentguard.Verdict) {
+	log.Warn("coach output rejected",
 		"scope", "coach_output", "session_id", sessionID, "field", field,
 		"category", v.Category, "rule_id", v.RuleID, "text_runes", utf8.RuneCountInString(text))
 }

@@ -22,6 +22,10 @@ type fakeRepo struct {
 	// CoachQuestion 用例的可控数据
 	questions []Question
 	jobTitle  string
+	// 示范结果持久化存储（question_id → 示范结果），nil 表示空表
+	coachings map[string]*agent.AnswerCoaching
+	// 置非 nil 时模拟 UpsertCoaching 落库失败
+	upsertCoachingErr error
 }
 
 func (f *fakeRepo) Create(ctx context.Context, s *Session) error { return nil }
@@ -58,6 +62,22 @@ func (f *fakeRepo) CreateAnswer(ctx context.Context, a *Answer) error {
 	return nil
 }
 func (f *fakeRepo) CountAnswered(ctx context.Context, sessionID string) (int, error) { return 0, nil }
+func (f *fakeRepo) GetCoachingByQuestionID(ctx context.Context, questionID string) (*agent.AnswerCoaching, error) {
+	if f.coachings == nil {
+		return nil, nil
+	}
+	return f.coachings[questionID], nil
+}
+func (f *fakeRepo) UpsertCoaching(ctx context.Context, sessionID, questionID string, c *agent.AnswerCoaching) error {
+	if f.upsertCoachingErr != nil {
+		return f.upsertCoachingErr
+	}
+	if f.coachings == nil {
+		f.coachings = map[string]*agent.AnswerCoaching{}
+	}
+	f.coachings[questionID] = c
+	return nil
+}
 
 // TestSubmitAnswer_ContentRejectedBeforePersist 回答含违禁词 → 400 CONTENT_REJECTED 且未落库
 func TestSubmitAnswer_ContentRejectedBeforePersist(t *testing.T) {
@@ -101,6 +121,8 @@ type fakeAgent struct {
 	coaching  *agent.AnswerCoaching
 	err       error
 	lastInput agent.AnswerCoachInput
+	// CoachAnswer 调用计数（缓存命中用例断言为 0）
+	coachCalls int
 }
 
 func (f *fakeAgent) PlanQuestions(ctx context.Context, in agent.PlanQuestionsInput) ([]agent.PlannedQuestion, error) {
@@ -116,6 +138,7 @@ func (f *fakeAgent) OpeningMessage(ctx context.Context, in agent.OpeningInput) (
 	return "", nil
 }
 func (f *fakeAgent) CoachAnswer(ctx context.Context, in agent.AnswerCoachInput) (*agent.AnswerCoaching, error) {
+	f.coachCalls++
 	f.lastInput = in
 	return f.coaching, f.err
 }
@@ -243,6 +266,75 @@ func TestCoachQuestion_AgentError(t *testing.T) {
 
 	_, err := svc.CoachQuestion(context.Background(), "u1", "s1", "q1")
 	assertAppErr(t, err, "COACHING_FAILED", 500)
+}
+
+// TestCoachQuestion_CacheHit 命中持久化示范 → 直接返回缓存内容，且不调用 Agent（省成本）
+func TestCoachQuestion_CacheHit(t *testing.T) {
+	cached := &agent.AnswerCoaching{
+		ImprovedAnswer: "缓存中的示范",
+		KeyChanges:     []string{"更聚焦"},
+		PromptVersion:  "interview.answer_coach.v1",
+		Model:          "mock",
+	}
+	repo := &fakeRepo{
+		sess:      completedSession(),
+		questions: []Question{answeredQuestion()},
+		coachings: map[string]*agent.AnswerCoaching{"q1": cached},
+	}
+	fa := &fakeAgent{coaching: &agent.AnswerCoaching{ImprovedAnswer: "不应被生成"}}
+	svc := &Service{repo: repo, agent: fa, log: discardLogger()}
+
+	got, err := svc.CoachQuestion(context.Background(), "u1", "s1", "q1")
+	if err != nil {
+		t.Fatalf("CoachQuestion error: %v", err)
+	}
+	if fa.coachCalls != 0 {
+		t.Errorf("缓存命中时不应调用 Agent，实际调用 %d 次", fa.coachCalls)
+	}
+	if got != cached {
+		t.Errorf("应原样返回持久化结果: got %+v, want %+v", got, cached)
+	}
+}
+
+// TestCoachQuestion_GeneratedAndPersisted 未命中缓存 → 生成 → 已落库
+func TestCoachQuestion_GeneratedAndPersisted(t *testing.T) {
+	coaching := &agent.AnswerCoaching{
+		ImprovedAnswer: "新生成的示范",
+		KeyChanges:     []string{"更具体"},
+		PromptVersion:  "interview.answer_coach.v1",
+		Model:          "mock",
+	}
+	repo := &fakeRepo{sess: completedSession(), questions: []Question{answeredQuestion()}, jobTitle: "Go 工程师"}
+	fa := &fakeAgent{coaching: coaching}
+	svc := &Service{repo: repo, agent: fa, log: discardLogger()}
+
+	got, err := svc.CoachQuestion(context.Background(), "u1", "s1", "q1")
+	if err != nil {
+		t.Fatalf("CoachQuestion error: %v", err)
+	}
+	if fa.coachCalls != 1 {
+		t.Errorf("未命中缓存时应调用 Agent 1 次，实际 %d 次", fa.coachCalls)
+	}
+	if saved := repo.coachings["q1"]; saved != coaching {
+		t.Errorf("生成结果未正确落库: saved=%+v, want %+v", saved, coaching)
+	}
+	if got != coaching {
+		t.Errorf("returned coaching mismatch")
+	}
+}
+
+// TestCoachQuestion_UpsertError 落库失败 → 500 INTERNAL_ERROR（下次点击可重试）
+func TestCoachQuestion_UpsertError(t *testing.T) {
+	repo := &fakeRepo{
+		sess:              completedSession(),
+		questions:         []Question{answeredQuestion()},
+		upsertCoachingErr: errors.New("db down"),
+	}
+	fa := &fakeAgent{coaching: &agent.AnswerCoaching{ImprovedAnswer: "示范"}}
+	svc := &Service{repo: repo, agent: fa, log: discardLogger()}
+
+	_, err := svc.CoachQuestion(context.Background(), "u1", "s1", "q1")
+	assertAppErr(t, err, "INTERNAL_ERROR", 500)
 }
 
 func TestCanTransition(t *testing.T) {

@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"ai-interview-platform/internal/agent"
 )
 
 // ErrDuplicateAnswer 该问题已回答过
@@ -190,13 +192,15 @@ func (r *Repository) UpdateAnswerAnalysis(ctx context.Context, answerID string, 
 	return err
 }
 
-// ListQuestionsBySession 查询会话的所有问题（含回答状态）
+// ListQuestionsBySession 查询会话的所有问题（含回答状态与已持久化的更优答案示范）
 func (r *Repository) ListQuestionsBySession(ctx context.Context, sessionID string) ([]Question, error) {
 	rows, err := r.db.Query(ctx,
 		`SELECT q.id, q.session_id, q.seq, q.question_type, q.question, q.difficulty, q.source, q.expected_points::text, q.metadata::text, q.created_at,
-		        a.id, a.input_type, a.text_content, COALESCE(a.duration_ms,0), COALESCE(a.analysis::text,'{}'), a.created_at
+		        a.id, a.input_type, a.text_content, COALESCE(a.duration_ms,0), COALESCE(a.analysis::text,'{}'), a.created_at,
+		        ac.improved_answer, ac.key_changes::text, ac.prompt_version, ac.model
 		 FROM interview_questions q
 		 LEFT JOIN interview_answers a ON a.question_id = q.id
+		 LEFT JOIN answer_coachings ac ON ac.question_id = q.id
 		 WHERE q.session_id = $1 ORDER BY q.seq`, sessionID)
 	if err != nil {
 		return nil, err
@@ -211,10 +215,13 @@ func (r *Repository) ListQuestionsBySession(ctx context.Context, sessionID strin
 		var answerDurationMs int
 		var answerAnalysisJSON string
 		var answerCreatedAt *time.Time
+		// 示范结果（LEFT JOIN 无行时均为 NULL）
+		var coachingAnswer, coachingKeyChanges, coachingPromptVersion, coachingModel *string
 
 		if err := rows.Scan(&q.ID, &q.SessionID, &q.Seq, &q.QuestionType, &q.Question, &q.Difficulty,
 			&q.Source, &expectedJSON, &metadataJSON, &q.CreatedAt,
-			&answerID, &inputType, &textContent, &answerDurationMs, &answerAnalysisJSON, &answerCreatedAt); err != nil {
+			&answerID, &inputType, &textContent, &answerDurationMs, &answerAnalysisJSON, &answerCreatedAt,
+			&coachingAnswer, &coachingKeyChanges, &coachingPromptVersion, &coachingModel); err != nil {
 			return nil, err
 		}
 
@@ -234,6 +241,19 @@ func (r *Repository) ListQuestionsBySession(ctx context.Context, sessionID strin
 				CreatedAt:   *answerCreatedAt,
 			}
 			_ = json.Unmarshal([]byte(answerAnalysisJSON), &q.Answer.Analysis)
+		}
+		if coachingAnswer != nil {
+			q.Coaching = &agent.AnswerCoaching{
+				ImprovedAnswer: *coachingAnswer,
+				PromptVersion:  derefOr(coachingPromptVersion, ""),
+				Model:          derefOr(coachingModel, ""),
+			}
+			if coachingKeyChanges != nil {
+				_ = json.Unmarshal([]byte(*coachingKeyChanges), &q.Coaching.KeyChanges)
+			}
+			if q.Coaching.KeyChanges == nil {
+				q.Coaching.KeyChanges = []string{}
+			}
 		}
 		list = append(list, q)
 	}
@@ -288,6 +308,55 @@ func (r *Repository) CountAnswered(ctx context.Context, sessionID string) (int, 
 		`SELECT COUNT(*) FROM interview_answers WHERE session_id = $1`, sessionID,
 	).Scan(&count)
 	return count, err
+}
+
+// GetCoachingByQuestionID 查询某题已持久化的更优答案示范；无行返回 (nil, nil)。
+// pgx v5 不能直接把 JSONB 扫进 []byte，key_changes 需 ::text 后再 json.Unmarshal。
+func (r *Repository) GetCoachingByQuestionID(ctx context.Context, questionID string) (*agent.AnswerCoaching, error) {
+	var improvedAnswer, keyChangesJSON, promptVersion, model string
+	err := r.db.QueryRow(ctx,
+		`SELECT improved_answer, key_changes::text, prompt_version, model
+		 FROM answer_coachings WHERE question_id = $1`, questionID,
+	).Scan(&improvedAnswer, &keyChangesJSON, &promptVersion, &model)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	c := &agent.AnswerCoaching{
+		ImprovedAnswer: improvedAnswer,
+		PromptVersion:  promptVersion,
+		Model:          model,
+	}
+	_ = json.Unmarshal([]byte(keyChangesJSON), &c.KeyChanges)
+	if c.KeyChanges == nil {
+		c.KeyChanges = []string{}
+	}
+	return c, nil
+}
+
+// UpsertCoaching 持久化更优答案示范（question_id 唯一：答案不可变，示范结果只被覆盖更新）
+func (r *Repository) UpsertCoaching(ctx context.Context, sessionID, questionID string, c *agent.AnswerCoaching) error {
+	keyChanges := c.KeyChanges
+	if keyChanges == nil {
+		keyChanges = []string{}
+	}
+	keyChangesJSON, _ := json.Marshal(keyChanges)
+
+	_, err := r.db.Exec(ctx,
+		`INSERT INTO answer_coachings (id, session_id, question_id, improved_answer, key_changes, prompt_version, model, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, NOW(), NOW())
+		 ON CONFLICT (question_id) DO UPDATE SET
+		     improved_answer = EXCLUDED.improved_answer,
+		     key_changes = EXCLUDED.key_changes,
+		     prompt_version = EXCLUDED.prompt_version,
+		     model = EXCLUDED.model,
+		     updated_at = NOW()`,
+		uuid.New().String(), sessionID, questionID, c.ImprovedAnswer, keyChangesJSON, c.PromptVersion, c.Model,
+	)
+	return err
 }
 
 func derefOr(s *string, def string) string {

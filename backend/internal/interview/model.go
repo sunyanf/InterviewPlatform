@@ -80,6 +80,9 @@ type Question struct {
 	Answered bool    `json:"answered"`
 	AnswerID string  `json:"answer_id,omitempty"`
 	Answer   *Answer `json:"answer,omitempty"`
+
+	// 更优答案示范（持久化后随问题一并返回；答案不可变，示范结果永不过期）
+	Coaching *agent.AnswerCoaching `json:"coaching,omitempty"`
 }
 
 // Answer 面试回答

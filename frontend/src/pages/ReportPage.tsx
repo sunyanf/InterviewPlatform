@@ -414,10 +414,12 @@ function QuestionItem({ q }: { q: Question }) {
   const wrong = analysis?.wrong_points ?? []
   const hasGap = correct.length > 0 || missing.length > 0 || wrong.length > 0
 
-  // 更优答案示范：仅当该题已作答时可用
+  // 更优答案示范：仅当该题已作答时可用；已有持久化结果则直接展示（报告预生成或此前生成过）
   const answered = !!q.answer && q.answer.text_content.trim() !== ''
-  const [coachPhase, setCoachPhase] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
-  const [coaching, setCoaching] = useState<AnswerCoaching | null>(null)
+  const [coachPhase, setCoachPhase] = useState<'idle' | 'loading' | 'done' | 'error'>(
+    q.coaching ? 'done' : 'idle',
+  )
+  const [coaching, setCoaching] = useState<AnswerCoaching | null>(q.coaching ?? null)
   const [coachError, setCoachError] = useState('')
 
   const requestCoach = async () => {

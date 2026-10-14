@@ -284,7 +284,8 @@ function ReportView({ report, evaluation, session }: { report: Report; evaluatio
                 <strong>{ev.issue}</strong>
               </div>
               <div className="muted">依据：{ev.evidence}</div>
-              {ev.reference && <div className="dim">参考：{ev.reference}</div>}
+              {/* A5 修复：reference 是「考查知识域」短语而非可验证出处，不得展示为权威参考来源 */}
+              {ev.reference && <div className="dim">知识域：{ev.reference}</div>}
             </div>
           ))}
         </div>

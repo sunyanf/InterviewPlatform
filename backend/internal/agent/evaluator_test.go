@@ -30,7 +30,8 @@ func TestEvaluate_HappyPath(t *testing.T) {
 	if out.PromptVersion != PromptEvaluator {
 		t.Errorf("prompt_version = %q", out.PromptVersion)
 	}
-	if out.Model != "stub" {
+	// model 字段统一为响应中的真实模型名（红队报告可观测性修复），不再是 Provider 名称
+	if out.Model != "stub-model" {
 		t.Errorf("model = %q", out.Model)
 	}
 }

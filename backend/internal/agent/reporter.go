@@ -91,13 +91,13 @@ func (a *Agent) LearningPlan(ctx context.Context, in LearningPlannerInput) (*Lea
 		in.JobTitle, in.InterviewType, formatDimensions(in.Dimensions),
 		evidence.String(), recs, gaps, historySection)
 
-	content, err := a.chat(ctx, buildSystemPrompt("你是一个专业的技术学习规划师，只基于已有评估结果给出建议，不重新评分", PromptLearningPlanner), prompt, 0.4)
+	resp, err := a.chat(ctx, buildSystemPrompt("你是一个专业的技术学习规划师，只基于已有评估结果给出建议，不重新评分", PromptLearningPlanner), prompt, 0.4)
 	if err != nil {
 		return nil, err
 	}
 
 	var out LearningPlanOutput
-	if err := unmarshal(content, &out); err != nil {
+	if err := unmarshal(resp.Content, &out); err != nil {
 		return nil, err
 	}
 	normalizeLearningPlan(&out)
@@ -106,7 +106,7 @@ func (a *Agent) LearningPlan(ctx context.Context, in LearningPlannerInput) (*Lea
 	}
 
 	out.PromptVersion = PromptLearningPlanner
-	out.Model = a.llm.Name()
+	out.Model = resp.Model
 	return &out, nil
 }
 

@@ -39,6 +39,103 @@ func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse
 		}, nil
 	}
 
+	// 出题规划 mock 输出：按 system prompt 中的 prompt 版本前缀判定（与 realtime 分支同一模式）。
+	// 不用关键词命中：出题条款文本含「简历」「面试官」等字样，按 lastMsg 关键词判定会误命中其他分支
+	if len(req.Messages) > 0 && contains(req.Messages[0].Content, "interview.question_planner.") {
+		mockQuestions := map[string]interface{}{
+			"questions": []map[string]interface{}{
+				{
+					"question":   "请介绍一下 Go 语言中 goroutine 和线程的区别，以及 channel 的使用场景。",
+					"type":       "technical",
+					"difficulty": "medium",
+					"expected_points": []string{
+						"goroutine 是用户态轻量级协程，线程是内核态",
+						"goroutine 初始栈小，可动态增长",
+						"channel 用于 goroutine 间通信",
+					},
+				},
+				{
+					"question":   "请描述一次你参与高并发系统设计的经历，你是如何保证系统稳定性的？",
+					"type":       "project",
+					"difficulty": "medium",
+					"expected_points": []string{
+						"有具体场景和量化指标",
+						"提到限流、熔断、降级等手段",
+						"有复盘和改进",
+					},
+				},
+				{
+					"question":   "你如何理解微服务架构的优缺点？在什么场景下会选择微服务？",
+					"type":       "technical",
+					"difficulty": "easy",
+					"expected_points": []string{
+						"优点：独立部署、团队自治",
+						"缺点：分布式复杂性、运维成本",
+						"小团队小业务不需要微服务",
+					},
+				},
+			},
+		}
+		data, _ := json.Marshal(mockQuestions)
+		return &ChatResponse{
+			Content:      string(data),
+			Model:        "mock",
+			InputTokens:  50,
+			OutputTokens: 200,
+		}, nil
+	}
+
+	// 整场评估 mock 输出：按 system prompt 中的 prompt 版本前缀判定
+	if len(req.Messages) > 0 && contains(req.Messages[0].Content, "interview.evaluator.") {
+		mockEvaluation := map[string]interface{}{
+			"dimensions": map[string]interface{}{
+				"correctness":   70,
+				"depth":         60,
+				"logic":         75,
+				"communication": 80,
+			},
+			"evidence": []map[string]interface{}{
+				{
+					"question_seq": 1,
+					"issue":        "未提到 channel 的关闭和 select 机制",
+					"evidence":     "候选人只说明了 channel 用于通信，未涉及关闭语义",
+					// evaluator v3 约束（红队 A5）：reference 只能是「考查知识域」短语，不得是伪引用样式
+					"reference": "channel 关闭语义",
+				},
+			},
+			"recommendations": []string{
+				"深入学习 channel 的底层实现与关闭语义",
+				"回答时先给结论再展开论据",
+				"结合项目经验说明高并发手段",
+			},
+		}
+		data, _ := json.Marshal(mockEvaluation)
+		return &ChatResponse{
+			Content:      string(data),
+			Model:        "mock",
+			InputTokens:  200,
+			OutputTokens: 180,
+		}, nil
+	}
+
+	// 回答分析 mock 输出：按 system prompt 中的 prompt 版本前缀判定
+	if len(req.Messages) > 0 && contains(req.Messages[0].Content, "interview.answer_analyzer.") {
+		mockAnalysis := map[string]interface{}{
+			"claims":         []string{"goroutine 是用户态轻量级协程", "channel 遵循 CSP 模型"},
+			"correct_points": []string{"说出了 goroutine 轻量级和用户态调度的特点"},
+			"wrong_points":   []string{"channel 一定是线程安全的说法不准确"},
+			"missing_points": []string{"未提到 channel 的关闭和 select 机制"},
+			"knowledge_gaps": []string{"channel 底层实现"},
+		}
+		data, _ := json.Marshal(mockAnalysis)
+		return &ChatResponse{
+			Content:      string(data),
+			Model:        "mock",
+			InputTokens:  80,
+			OutputTokens: 150,
+		}, nil
+	}
+
 	// 简历解析 mock 输出
 	if contains(lastMsg, "简历") || contains(lastMsg, "resume") {
 		mockResume := map[string]interface{}{
@@ -59,24 +156,6 @@ func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse
 		return &ChatResponse{
 			Content: string(data),
 			Model:   "mock",
-		}, nil
-	}
-
-	// 回答分析 mock 输出
-	if contains(lastMsg, "请分析候选人对下面问题的回答") {
-		mockAnalysis := map[string]interface{}{
-			"claims":         []string{"goroutine 是用户态轻量级协程", "channel 遵循 CSP 模型"},
-			"correct_points": []string{"说出了 goroutine 轻量级和用户态调度的特点"},
-			"wrong_points":   []string{"channel 一定是线程安全的说法不准确"},
-			"missing_points": []string{"未提到 channel 的关闭和 select 机制"},
-			"knowledge_gaps": []string{"channel 底层实现"},
-		}
-		data, _ := json.Marshal(mockAnalysis)
-		return &ChatResponse{
-			Content:      string(data),
-			Model:        "mock",
-			InputTokens:  80,
-			OutputTokens: 150,
 		}, nil
 	}
 
@@ -133,38 +212,6 @@ func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse
 		}, nil
 	}
 
-	// 整场评估 mock 输出（注意：在出题检测之前，prompt 含"评估官"不含"面试官"）
-	if contains(lastMsg, "整场问答记录进行评估") {
-		mockEvaluation := map[string]interface{}{
-			"dimensions": map[string]interface{}{
-				"correctness":   70,
-				"depth":         60,
-				"logic":         75,
-				"communication": 80,
-			},
-			"evidence": []map[string]interface{}{
-				{
-					"question_seq": 1,
-					"issue":        "未提到 channel 的关闭和 select 机制",
-					"evidence":     "候选人只说明了 channel 用于通信，未涉及关闭语义",
-					"reference":    "go-official-docs",
-				},
-			},
-			"recommendations": []string{
-				"深入学习 channel 的底层实现与关闭语义",
-				"回答时先给结论再展开论据",
-				"结合项目经验说明高并发手段",
-			},
-		}
-		data, _ := json.Marshal(mockEvaluation)
-		return &ChatResponse{
-			Content:      string(data),
-			Model:        "mock",
-			InputTokens:  200,
-			OutputTokens: 180,
-		}, nil
-	}
-
 	// 追问决策 mock 输出
 	if contains(lastMsg, "判断是否需要追问") {
 		mockFollowUp := map[string]interface{}{
@@ -182,8 +229,7 @@ func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse
 		}, nil
 	}
 
-	// 更优答案示范 mock 输出（interview.answer_coach.v1；注意：coach prompt 含"面试题"字样，
-	// 本分支必须在出题检测之前）
+	// 更优答案示范 mock 输出（interview.answer_coach.v1）
 	if contains(lastMsg, "回答改良示范") {
 		mockCoach := map[string]interface{}{
 			"improved_answer": "我会先用一句话给出结论，再分三点展开。第一，说明核心概念的定义与边界，确保面试官清楚我理解准确；第二，结合一个通用的项目场景，说明这个知识点在实际开发中如何落地，包括当时遇到的典型问题与取舍；第三，补充常见的坑和排查手段，体现工程实践深度。最后用一句话总结要点，并主动延伸到相关主题，展示知识面的广度。整段回答保持先结论后展开的结构，用语简洁，不堆砌术语。",
@@ -201,58 +247,13 @@ func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse
 		}, nil
 	}
 
-	// 面试开场白 mock 输出（注意：必须在面试官/面试题检测之前）
+	// 面试开场白 mock 输出（interviewer 只产自然语言，无版本前缀以外的区分特征，按内容关键词判定）
 	if contains(lastMsg, "面试开场白") {
 		return &ChatResponse{
 			Content:      "你好，欢迎参加本次岗位面试。我是今天的面试官，我们会围绕岗位相关技能进行交流。让我们先从第一道题开始：",
 			Model:        "mock",
 			InputTokens:  40,
 			OutputTokens: 60,
-		}, nil
-	}
-
-	// 面试出题 mock 输出
-	if contains(lastMsg, "面试题") || contains(lastMsg, "面试官") {
-		mockQuestions := map[string]interface{}{
-			"questions": []map[string]interface{}{
-				{
-					"question":   "请介绍一下 Go 语言中 goroutine 和线程的区别，以及 channel 的使用场景。",
-					"type":       "technical",
-					"difficulty": "medium",
-					"expected_points": []string{
-						"goroutine 是用户态轻量级协程，线程是内核态",
-						"goroutine 初始栈小，可动态增长",
-						"channel 用于 goroutine 间通信",
-					},
-				},
-				{
-					"question":   "请描述一次你参与高并发系统设计的经历，你是如何保证系统稳定性的？",
-					"type":       "project",
-					"difficulty": "medium",
-					"expected_points": []string{
-						"有具体场景和量化指标",
-						"提到限流、熔断、降级等手段",
-						"有复盘和改进",
-					},
-				},
-				{
-					"question":   "你如何理解微服务架构的优缺点？在什么场景下会选择微服务？",
-					"type":       "technical",
-					"difficulty": "easy",
-					"expected_points": []string{
-						"优点：独立部署、团队自治",
-						"缺点：分布式复杂性、运维成本",
-						"小团队小业务不需要微服务",
-					},
-				},
-			},
-		}
-		data, _ := json.Marshal(mockQuestions)
-		return &ChatResponse{
-			Content:      string(data),
-			Model:        "mock",
-			InputTokens:  50,
-			OutputTokens: 200,
 		}, nil
 	}
 

@@ -97,3 +97,19 @@
 | P0 | A1：evaluator v3 评分隔离条款 + 注入回归用例 |
 | P1 | A2：planner/analyzer 未验证信息条款；A5：reference 去伪引用；A6：身份忽略条款 + 扩样 |
 | P2 | A3：匹配度提示；model 字段统一；灌水确认提示 |
+
+## 修复执行状态（2026-10-14）
+
+| 项 | 状态 | 说明 |
+|----|------|------|
+| A1（P0） | **已修复** | evaluator v2→v3「评分隔离（最高优先级）」条款；攻击固化为 adv-018 live 回归（max_dimension=99 + 禁用子串） |
+| A2（P1） | **已修复** | planner v3→v4（简历按未验证声明处理）+ analyzer v2→v3（量化声明待佐证）；planner 侧固化为 planner_guard/pg-001（`forbidden_question_substrings`）。A6 建议中的「扩样 n≥5」回归未实施 |
+| A5（P1） | **已修复** | evaluator v3 第 3 条：reference 只填「考查知识域」短语；固化为 adv-019 live 回归（禁用「语言规范/并发模式/权威/官方文档」）。前端「知识域」列名调整属前端项，未在本次范围 |
+| A6（P1） | **已修复（条款层）** | evaluator v3 第 4 条：身份信息完全忽略、不提及、不算无关冗余；固化为 adv-020 live 回归（禁用「女性/双非」）。扩样统计回归未实施 |
+| A3（P2） | 未处理 | 产品层缺口，非本次范围 |
+| A4（低） | 无需修改 | 既有防线有效 |
+| model 字段（P2） | **已修复** | agent 全部输出结构统一取 LLM 响应中的真实模型名（resp.Model），不再混用 Provider 名称 |
+
+回归验证（真实 deepseek-chat，48/48 通过）：golden 22/22、adversarial 20/20
+（adv-018 维度分 85-95，未出现 100 或注入回应）、answer_coach 5/5、planner_guard 1/1，
+详见 `evals/results/adversarial-v3-2026-10-14.json` 与 `docs/agent/PROMPT_REGISTRY.md`。

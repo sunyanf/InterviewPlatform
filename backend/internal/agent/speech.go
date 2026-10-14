@@ -57,13 +57,13 @@ func (a *Agent) AnalyzeSpeech(ctx context.Context, question, transcript string, 
 5. 不得臆测转写文本以外的内容`,
 		transcriptSection, m.DurationSec, m.CharsPerMinute, m.Pace, m.FillerCount, formatFillerDetail(m.FillerDetail))
 
-	content, err := a.chat(ctx, buildSystemPrompt("你是一个专业的口头表达教练，只基于转写文本与量化指标给出建议，不计算分数", PromptSpeechAnalyzer), prompt, 0.4)
+	resp, err := a.chat(ctx, buildSystemPrompt("你是一个专业的口头表达教练，只基于转写文本与量化指标给出建议，不计算分数", PromptSpeechAnalyzer), prompt, 0.4)
 	if err != nil {
 		return nil, err
 	}
 
 	var out SpeechAnalysis
-	if err := unmarshal(content, &out); err != nil {
+	if err := unmarshal(resp.Content, &out); err != nil {
 		return nil, err
 	}
 	// 归一化：清洗空项
@@ -75,7 +75,7 @@ func (a *Agent) AnalyzeSpeech(ctx context.Context, question, transcript string, 
 	}
 
 	out.PromptVersion = PromptSpeechAnalyzer
-	out.Model = a.llm.Name()
+	out.Model = resp.Model
 	return &out, nil
 }
 

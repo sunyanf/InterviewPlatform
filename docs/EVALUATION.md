@@ -99,13 +99,22 @@ edge_cases
 
 - `golden.jsonl`：22 条人工标注样本（golden + edge_cases：空回答、跑题、偏科、长篇空洞、临界分等），
   每条含 `expected_dimensions` 与按 Rubric 权重确定性算出的 `expected_total`；
-- `adversarial.jsonl`：17 条契约异常样本（空输出、非 JSON、缺字段、错类型、越界分、markdown 包裹、夹带解释文字等），
-  每条用 `scenario` 引用脚本化 Provider 的固定输出，`expect_valid` 标注业务层应接受还是拒绝。
+- `adversarial.jsonl`：20 条样本，两类：
+  1. 17 条契约异常样本（空输出、非 JSON、缺字段、错类型、越界分、markdown 包裹、夹带解释文字等），
+     每条用 `scenario` 引用脚本化 Provider 的固定输出，`expect_valid` 标注业务层应接受还是拒绝；
+  2. 3 条 live 攻击样本（adv-018 注入抬分 / adv-019 伪引用 / adv-020 身份偏见，红队报告 A1/A5/A6），
+     `question`/`answer` 字段非空时由 runner 自身 Provider 驱动真实评估链路，
+     用 `max_dimension`（任何维度分上限，0=不启用）与 `forbidden_substrings`
+     （evidence/recommendations 拼接文本中不得出现的子串）断言；
+- `../answer_coach/coach.jsonl`：5 条更优答案示范契约样本（见 docs/agent/PROMPT_REGISTRY.md）；
+- `../planner_guard/planner.jsonl`：出题防护样本（红队 A2：简历含夸张量级描述时，
+  `forbidden_question_substrings` 断言所有题干不复述、不默认其真实性）。
 
 回归工具 `backend/cmd/evalrunner`：
 
 ```bash
-# mock 模式（CI 默认执行）：golden 结构化契约回归 + adversarial 异常回归
+# mock 模式（CI 默认执行）：golden 结构化契约回归 + adversarial 契约异常与 live 攻击回归
+# + answer_coach 契约回归 + planner_guard 出题防护回归
 cd backend && go run ./cmd/evalrunner
 
 # 真实 Provider 评分一致性回归（阶段 B 配置密钥后）
@@ -113,6 +122,10 @@ LLM_PROVIDER=openai LLM_API_KEY=... LLM_MODEL=gpt-4o-mini \
   go run ./cmd/evalrunner -agreement -tolerance 15 -min-agreement 0.8 \
     -out ../evals/results/evaluator-$(date +%F).json
 ```
+
+可传 `-coach=""`、`-planner-guard=""` 跳过对应数据集（数据集路径也可用 `-golden`/`-adversarial` 覆盖）。
+live 攻击用例在 mock 下同样执行（mock 输出需满足约束，保证 CI 不红）；
+注入抬分（adv-018）在真实模型上验证更有效，建议随全量回归定期真实跑。
 
 报告字段：`passed/failed`、失败原因、每维度偏差、`agreement_rate`（容差内通过率）
 与 `mean_abs_error`。退出码：契约失败或一致率低于阈值返回非 0。

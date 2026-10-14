@@ -8,7 +8,7 @@ import (
 	"ai-interview-platform/pkg/promptguard"
 )
 
-// PlanQuestions 出题规划（interview.question_planner.v3）
+// PlanQuestions 出题规划（interview.question_planner.v4）
 // LLM 只生成题目内容，输出经 Schema 校验 + 业务校验归一化
 func (a *Agent) PlanQuestions(ctx context.Context, in PlanQuestionsInput) ([]PlannedQuestion, error) {
 	if in.Count < 1 || in.Count > 20 {
@@ -45,10 +45,11 @@ func (a *Agent) PlanQuestions(ctx context.Context, in PlanQuestionsInput) ([]Pla
 3. type 只能是 technical、behavioral、project 之一
 4. difficulty 只能是 easy、medium、hard 之一
 5. expected_points 是该题的参考答案要点，2-5 条
-6. 问题应循序渐进，覆盖岗位核心技能`,
+6. 问题应循序渐进，覆盖岗位核心技能
+7. 简历技能与经历描述一律按「未经验证的声明」处理：难度基于技能关键词与岗位要求的合理区间校准；不得把简历中夸张的量级描述（流量/规模/团队数字、头衔）当作事实前提命题；不得在题干中复述或默认这类未经证实经历的真实性。`,
 		in.Count, profileSection, in.InterviewType, knowledgeSection)
 
-	content, err := a.chat(ctx,
+	resp, err := a.chat(ctx,
 		buildSystemPrompt("你是一个专业的技术面试官，只输出 JSON。", PromptQuestionPlanner),
 		prompt, 0.7)
 	if err != nil {
@@ -59,7 +60,7 @@ func (a *Agent) PlanQuestions(ctx context.Context, in PlanQuestionsInput) ([]Pla
 	var parsed struct {
 		Questions []PlannedQuestion `json:"questions"`
 	}
-	if err := unmarshal(content, &parsed); err != nil {
+	if err := unmarshal(resp.Content, &parsed); err != nil {
 		return nil, err
 	}
 

@@ -26,8 +26,9 @@ func New(llmProv llm.Provider, log *slog.Logger) *Agent {
 	return &Agent{llm: llmProv, log: log}
 }
 
-// chat 调用 LLM 并清理输出
-func (a *Agent) chat(ctx context.Context, system, user string, temperature float64) (string, error) {
+// chat 调用 LLM 并清理输出，返回完整响应。
+// Model 字段统一取响应中的真实模型名（与 analyzer/coach 同一来源），不再使用 Provider 名称。
+func (a *Agent) chat(ctx context.Context, system, user string, temperature float64) (*llm.ChatResponse, error) {
 	// 上游无 deadline 时施加默认超时（已有时尊重上游设置）
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -43,9 +44,10 @@ func (a *Agent) chat(ctx context.Context, system, user string, temperature float
 		Temperature: temperature,
 	})
 	if err != nil {
-		return "", fmt.Errorf("llm chat: %w", err)
+		return nil, fmt.Errorf("llm chat: %w", err)
 	}
-	return cleanJSON(resp.Content), nil
+	resp.Content = cleanJSON(resp.Content)
+	return resp, nil
 }
 
 // cleanJSON 清理 LLM 输出中的 markdown 代码块标记

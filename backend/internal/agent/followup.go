@@ -42,7 +42,7 @@ func (a *Agent) DecideFollowUp(ctx context.Context, in FollowUpInput) (*FollowUp
 5. 不需要追问时，question 和 target_gap 填空字符串`,
 		questionSection, promptguard.Wrap("candidate_answer", in.AnswerText), analysisPart)
 
-	content, err := a.chat(ctx,
+	resp, err := a.chat(ctx,
 		buildSystemPrompt("你是一个专业的技术面试官，只输出 JSON。", PromptFollowUp),
 		prompt, 0.3)
 	if err != nil {
@@ -51,7 +51,7 @@ func (a *Agent) DecideFollowUp(ctx context.Context, in FollowUpInput) (*FollowUp
 
 	// Schema 校验
 	var decision FollowUpDecision
-	if err := unmarshal(content, &decision); err != nil {
+	if err := unmarshal(resp.Content, &decision); err != nil {
 		return nil, err
 	}
 

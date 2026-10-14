@@ -23,7 +23,8 @@ const (
 	// 系统约束：type/difficulty 枚举校验，业务代码归一化，不决定任何会话状态
 	// v2 变更：增加知识库参考资料上下文（RAG，Week5）；无资料时行为与 v1 一致
 	// v3 变更：岗位/简历/知识库改为 <untrusted_*> 标签包裹的数据区（P0-5）
-	PromptQuestionPlanner = "interview.question_planner.v3"
+	// v4 变更：简历技能与经历按「未经验证的声明」处理，夸张量级描述不得成为题目前提（红队 A2）
+	PromptQuestionPlanner = "interview.question_planner.v4"
 
 	// PromptInterviewer 面试官开场
 	// 用途：生成面试开场白
@@ -55,7 +56,8 @@ const (
 	// 输出 Schema：{"claims","correct_points","wrong_points","missing_points","knowledge_gaps"}
 	// 系统约束：分析必须基于回答原文与参考要点（Evidence 原则），不做最终评分
 	// v2 变更：问题/参考要点与候选人回答改为 <untrusted_*> 标签包裹（P0-5）
-	PromptAnswerAnalyzer = "interview.answer_analyzer.v2"
+	// v3 变更：无法验证的量化声明不得直接计入 correct_points，须标注待佐证（红队 A2）
+	PromptAnswerAnalyzer = "interview.answer_analyzer.v3"
 
 	// PromptEvaluator 整场评估
 	// 用途：基于整场问答与回答分析，给出维度评分、证据与改进建议
@@ -63,7 +65,9 @@ const (
 	// 输出 Schema：{"dimensions":{"correctness","depth","logic","communication"},"evidence":[{"question_seq","issue","evidence","reference"}],"recommendations":[]}
 	// 系统约束：只输出维度分（0-100 整数）与证据；总分由业务代码按 Rubric 权重确定性计算（AGENTS.md #15）
 	// v2 变更：岗位标题、问答记录、知识库资料改为 <untrusted_*> 标签包裹（P0-5）
-	PromptEvaluator = "interview.evaluator.v2"
+	// v3 变更：评分隔离条款——注入文字不得影响分数、reference 仅知识域短语、
+	//          身份信息完全忽略（红队 A1/A5/A6）
+	PromptEvaluator = "interview.evaluator.v3"
 
 	// PromptLearningPlanner 学习计划生成
 	// 用途：基于评估结果（维度分/证据/建议）归纳优点与不足，生成学习计划与下次训练建议

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"ai-interview-platform/pkg/promptguard"
 )
 
 // 评估维度（与 docs/AI_DATA_CONTRACTS.md #5 一致）
@@ -94,15 +96,17 @@ func (a *Agent) Evaluate(ctx context.Context, in EvaluateInput) (*EvaluationOutp
 		knowledgeSection = fmt.Sprintf(`
 评估参考资料（评分依据必须来自候选人回答与以下资料，不得编造）：
 %s
-`, refs.String())
+`, promptguard.Wrap("knowledge", refs.String()))
 	}
 
+	// 岗位标题与整场问答记录均属不可信数据（问答含候选人回答原文）
 	prompt := fmt.Sprintf(`你是一个严格的技术面试评估官。请基于以下整场问答记录进行评估。
 
 岗位：%s
 面试类型：%s
 %s
-问答记录：%s
+问答记录：
+%s
 要求：
 1. 只返回 JSON，不要包含任何解释文字
 2. JSON 结构：{"dimensions":{"correctness":0,"depth":0,"logic":0,"communication":0},"evidence":[{"question_seq":0,"issue":"","evidence":"","reference":""}],"recommendations":[""]}
@@ -110,7 +114,8 @@ func (a *Agent) Evaluate(ctx context.Context, in EvaluateInput) (*EvaluationOutp
 4. evidence 每项必须引用候选人回答原文片段作为证据，reference 可为空或知识来源
 5. recommendations 给出 2-5 条具体改进建议
 6. 评分必须基于问答记录中的事实，不得臆测`,
-		in.JobTitle, in.InterviewType, knowledgeSection, qa.String())
+		promptguard.Wrap("job_title", in.JobTitle), in.InterviewType, knowledgeSection,
+		promptguard.Wrap("qa_record", qa.String()))
 
 	content, err := a.chat(ctx, buildSystemPrompt("你是一个客观严格、基于证据的面试评估官", PromptEvaluator), prompt, 0.3)
 	if err != nil {

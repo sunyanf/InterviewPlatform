@@ -6,18 +6,20 @@ import (
 	"strings"
 
 	"ai-interview-platform/pkg/llm"
+	"ai-interview-platform/pkg/promptguard"
 )
 
-// AnalyzeAnswer 回答分析（interview.answer_analyzer.v1）
+// AnalyzeAnswer 回答分析（interview.answer_analyzer.v2）
 // 分析基于问题、参考要点与回答原文（Evidence 原则），输出经 Schema 校验
 func (a *Agent) AnalyzeAnswer(ctx context.Context, in AnalyzeAnswerInput) (*AnswerAnalysis, error) {
+	// 问题/参考要点由不可信输入衍生，候选人回答为用户原文：均作为数据区注入
+	questionSection := promptguard.Wrap("question", fmt.Sprintf(
+		"问题：%s\n参考答案要点：\n%s", in.Question, joinPoints(in.ExpectedPoints)))
+
 	prompt := fmt.Sprintf(`请分析候选人对下面问题的回答。
 
-问题：%s
-参考答案要点：
 %s
 难度：%s
-候选人回答：
 %s
 
 要求：
@@ -29,7 +31,7 @@ func (a *Agent) AnalyzeAnswer(ctx context.Context, in AnalyzeAnswerInput) (*Answ
 6. missing_points：候选人未覆盖的参考要点
 7. knowledge_gaps：暴露出的知识缺口
 8. 所有分析必须基于回答原文，不要凭空推测`,
-		in.Question, joinPoints(in.ExpectedPoints), in.Difficulty, in.AnswerText)
+		questionSection, in.Difficulty, promptguard.Wrap("candidate_answer", in.AnswerText))
 
 	resp, err := a.llm.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{

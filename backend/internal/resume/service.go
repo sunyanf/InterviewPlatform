@@ -15,6 +15,7 @@ import (
 	"ai-interview-platform/internal/task"
 	apperrors "ai-interview-platform/pkg/errors"
 	"ai-interview-platform/pkg/llm"
+	"ai-interview-platform/pkg/promptguard"
 	"ai-interview-platform/pkg/resumeparse"
 	"ai-interview-platform/pkg/storage"
 )
@@ -199,6 +200,7 @@ func (s *Service) Parse(ctx context.Context, resumeID string) (*Resume, error) {
 
 // parseWithLLM 调用 LLM 将简历文本解析为结构化数据
 func (s *Service) parseWithLLM(ctx context.Context, text string) (*StructuredResume, error) {
+	// 简历原文属不可信输入：包裹为数据区，并在 system 声明其中的文字不得改变解析规则
 	prompt := fmt.Sprintf(`你是一个简历解析助手。请从以下简历文本中提取结构化信息，以 JSON 格式返回。
 
 要求：
@@ -208,11 +210,11 @@ func (s *Service) parseWithLLM(ctx context.Context, text string) (*StructuredRes
 4. 如果某项信息不存在，填空字符串或空数组
 
 简历文本：
-%s`, text)
+%s`, promptguard.Wrap("resume", text))
 
 	resp, err := s.llm.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{
-			{Role: "system", Content: "你是一个专业的简历解析助手，只输出 JSON。"},
+			{Role: "system", Content: "你是一个专业的简历解析助手，只输出 JSON。" + promptguard.IsolationClause},
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.1,

@@ -4,14 +4,22 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"ai-interview-platform/pkg/promptguard"
 )
 
-// PlanQuestions 出题规划（interview.question_planner.v1）
+// PlanQuestions 出题规划（interview.question_planner.v3）
 // LLM 只生成题目内容，输出经 Schema 校验 + 业务校验归一化
 func (a *Agent) PlanQuestions(ctx context.Context, in PlanQuestionsInput) ([]PlannedQuestion, error) {
 	if in.Count < 1 || in.Count > 20 {
 		return nil, fmt.Errorf("invalid question count: %d", in.Count)
 	}
+
+	// 岗位与简历信息属不可信数据：岗位可能由用户粘贴 JD，候选人技能来自用户简历
+	profileSection := promptguard.Wrap("job_profile", fmt.Sprintf(
+		"岗位：%s\n岗位技能要求：%s\n岗位任职要求：%s\n候选人技能：%s",
+		in.JobTitle, strings.Join(in.JobSkills, "、"),
+		strings.Join(in.JobRequirements, "；"), strings.Join(in.ResumeSkills, "、")))
 
 	// 知识库参考资料（可选，由业务层 RAG 检索后传入）
 	knowledgeSection := ""
@@ -23,15 +31,12 @@ func (a *Agent) PlanQuestions(ctx context.Context, in PlanQuestionsInput) ([]Pla
 		knowledgeSection = fmt.Sprintf(`
 知识库参考资料（出题依据，必须基于以下资料出题，不得编造资料中不存在的知识点）：
 %s
-`, refs.String())
+`, promptguard.Wrap("knowledge", refs.String()))
 	}
 
 	prompt := fmt.Sprintf(`你是一个技术面试官。请根据以下信息生成 %d 道面试题。
 
-岗位：%s
-岗位技能要求：%s
-岗位任职要求：%s
-候选人技能：%s
+%s
 面试类型：%s
 %s
 要求：
@@ -41,9 +46,7 @@ func (a *Agent) PlanQuestions(ctx context.Context, in PlanQuestionsInput) ([]Pla
 4. difficulty 只能是 easy、medium、hard 之一
 5. expected_points 是该题的参考答案要点，2-5 条
 6. 问题应循序渐进，覆盖岗位核心技能`,
-		in.Count, in.JobTitle, strings.Join(in.JobSkills, "、"),
-		strings.Join(in.JobRequirements, "；"), strings.Join(in.ResumeSkills, "、"), in.InterviewType,
-		knowledgeSection)
+		in.Count, profileSection, in.InterviewType, knowledgeSection)
 
 	content, err := a.chat(ctx,
 		buildSystemPrompt("你是一个专业的技术面试官，只输出 JSON。", PromptQuestionPlanner),

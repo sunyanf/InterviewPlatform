@@ -28,8 +28,9 @@ func (p *MockProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse
 		lastMsg = req.Messages[len(req.Messages)-1].Content
 	}
 
-	// 实时面试官流式对话 mock 输出（依据 system prompt 中的版本标记判定）
-	if len(req.Messages) > 0 && contains(req.Messages[0].Content, "realtime.interviewer.v1") {
+	// 实时面试官流式对话 mock 输出（依据 system prompt 中的版本标记判定；
+	// 只匹配领域.能力前缀，不绑定具体版本号，避免 Prompt 版本升级时失效）
+	if len(req.Messages) > 0 && contains(req.Messages[0].Content, "realtime.interviewer.") {
 		return &ChatResponse{
 			Content:      "这个问题问得很好。你可以结合一个实际项目，说明当时面临的场景、你采取的方案以及最终效果。",
 			Model:        "mock",

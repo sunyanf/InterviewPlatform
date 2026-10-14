@@ -6,9 +6,10 @@ import (
 	"strings"
 
 	"ai-interview-platform/pkg/llm"
+	"ai-interview-platform/pkg/promptguard"
 )
 
-// OpeningMessage 面试官开场白（interview.interviewer.v1）
+// OpeningMessage 面试官开场白（interview.interviewer.v2）
 // 只产出对话内容，不改变会话状态
 func (a *Agent) OpeningMessage(ctx context.Context, in OpeningInput) (string, error) {
 	prompt := fmt.Sprintf(`你是一个友好的技术面试官。请生成一段面试开场白。
@@ -20,7 +21,7 @@ func (a *Agent) OpeningMessage(ctx context.Context, in OpeningInput) (string, er
 要求：
 1. 直接返回开场白文本，不要 JSON，不要任何解释
 2. 简短自然，包含问候、岗位面试说明，并引出第一道题
-3. 100 字以内`, in.JobTitle, in.InterviewType, in.FirstQuestion)
+3. 100 字以内`, promptguard.Wrap("job_title", in.JobTitle), in.InterviewType, in.FirstQuestion)
 
 	resp, err := a.llm.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{

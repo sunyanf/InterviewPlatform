@@ -1,6 +1,7 @@
 import { api, uploadFile } from './client'
 import type {
   AudioAnswer,
+  AnswerCoaching,
   Category,
   CreateSessionRequest,
   Evaluation,
@@ -71,6 +72,10 @@ export const interviewApi = {
   finish: (id: string) => api.post<InterviewSession>(`/interviews/${id}/finish`),
   submitAnswer: (id: string, body: { question_id: string; text_content: string; duration_ms: number }) =>
     api.post<SubmitAnswerResult>(`/interviews/${id}/answer`, body),
+  coach: (sessionId: string, questionId: string) =>
+    api.post<AnswerCoaching>(
+      `/interviews/${sessionId}/questions/${questionId}/coaching`,
+    ),
   openingSpeech: (id: string) => api.get<SpeechResult>(`/interviews/${id}/speech/opening`),
 }
 

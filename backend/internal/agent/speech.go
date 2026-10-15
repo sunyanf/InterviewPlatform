@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+
+	"ai-interview-platform/pkg/promptguard"
 )
 
 // SpeechAnalysis 语音表达分析输出（AI 数据 Contract）
@@ -36,10 +38,13 @@ func (a *Agent) AnalyzeSpeech(ctx context.Context, question, transcript string, 
 		return nil, fmt.Errorf("speech analysis requires transcript")
 	}
 
+	// 问题与转写文本均属不可信数据（转写来自候选人语音）
+	transcriptSection := promptguard.Wrap("transcript", fmt.Sprintf(
+		"问题：%s\n转写文本：%s", question, transcript))
+
 	prompt := fmt.Sprintf(`请基于以下语音回答的转写文本与量化指标，分析候选人的口头表达能力。
 
-问题：%s
-转写文本：%s
+%s
 音频时长：%.1f 秒
 语速：%.0f 字/分钟（评估：%s）
 口头禅：共 %d 次%s
@@ -50,15 +55,15 @@ func (a *Agent) AnalyzeSpeech(ctx context.Context, question, transcript string, 
 3. strengths 和 issues 各 0-3 条，必须基于转写文本与指标事实
 4. suggestions 给 1-4 条具体可执行的口头表达改进建议（如结构化表达、控制语速、减少口头禅）
 5. 不得臆测转写文本以外的内容`,
-		question, transcript, m.DurationSec, m.CharsPerMinute, m.Pace, m.FillerCount, formatFillerDetail(m.FillerDetail))
+		transcriptSection, m.DurationSec, m.CharsPerMinute, m.Pace, m.FillerCount, formatFillerDetail(m.FillerDetail))
 
-	content, err := a.chat(ctx, buildSystemPrompt("你是一个专业的口头表达教练，只基于转写文本与量化指标给出建议，不计算分数", PromptSpeechAnalyzer), prompt, 0.4)
+	resp, err := a.chat(ctx, buildSystemPrompt("你是一个专业的口头表达教练，只基于转写文本与量化指标给出建议，不计算分数", PromptSpeechAnalyzer), prompt, 0.4)
 	if err != nil {
 		return nil, err
 	}
 
 	var out SpeechAnalysis
-	if err := unmarshal(content, &out); err != nil {
+	if err := unmarshal(resp.Content, &out); err != nil {
 		return nil, err
 	}
 	// 归一化：清洗空项
@@ -70,7 +75,7 @@ func (a *Agent) AnalyzeSpeech(ctx context.Context, question, transcript string, 
 	}
 
 	out.PromptVersion = PromptSpeechAnalyzer
-	out.Model = a.llm.Name()
+	out.Model = resp.Model
 	return &out, nil
 }
 

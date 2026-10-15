@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { tokenStore } from '../api/client'
+import { getValidAccessToken } from '../api/client'
 import { interviewApi } from '../api/endpoints'
 import type { Answer, AnswerAnalysis, InterviewSession, Question } from '../api/types'
 import { isAutoplayEnabled, speak } from '../interview/speech'
@@ -196,10 +196,13 @@ export function useInterviewSocket(sessionId: string) {
       fetchAndReconcile(true, 28_000)
     }
 
-    const connect = () => {
-      const token = tokenStore.get()
+    const connect = async () => {
+      // WS 鉴权只能走 query token，无法像 REST 那样 401 后静默重放；
+      // 面试最长 90 分钟，断线重连时 access token 可能已过期，建连前先确保令牌新鲜
+      const token = await getValidAccessToken()
+      if (manualCloseRef.current) return // await 刷新期间连接可能已被 cleanup
       if (!token) {
-        setState((s) => ({ ...s, status: 'closed', error: '未登录' }))
+        setState((s) => ({ ...s, status: 'closed', error: '登录已过期，请重新登录' }))
         return
       }
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'

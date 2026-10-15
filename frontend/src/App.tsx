@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 
 import { useAuth } from './auth/AuthContext'
 import { Topbar } from './components/Topbar'
+import { Footer } from './components/Footer'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import DashboardPage from './pages/DashboardPage'
@@ -11,6 +12,8 @@ import PreparePage from './pages/PreparePage'
 import InterviewPage from './pages/InterviewPage'
 import ReportPage from './pages/ReportPage'
 import AdminPage from './pages/AdminPage'
+import PrivacyPolicyPage from './pages/PrivacyPolicyPage'
+import TermsOfServicePage from './pages/TermsOfServicePage'
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth()
@@ -52,6 +55,8 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/legal/privacy" element={<PrivacyPolicyPage />} />
+        <Route path="/legal/terms" element={<TermsOfServicePage />} />
         <Route
           path="/"
           element={
@@ -102,6 +107,7 @@ export default function App() {
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      {!inInterview && <Footer />}
     </>
   )
 }

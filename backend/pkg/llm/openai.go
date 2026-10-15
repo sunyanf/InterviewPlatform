@@ -15,6 +15,9 @@ type OpenAIConfig struct {
 	APIKey  string
 	BaseURL string // e.g. https://api.openai.com/v1
 	Model   string
+	// Timeout 非 streaming 请求的 HTTP client 整体超时；0 取默认 60s。
+	// DeepSeek 等服务在高峰期偶发响应超 60s，eval 批跑可通过 LLM_TIMEOUT 调大。
+	Timeout time.Duration
 }
 
 // OpenAIProvider OpenAI 兼容 Provider 实现
@@ -33,10 +36,14 @@ const (
 
 // NewOpenAIProvider 创建 OpenAI Provider
 func NewOpenAIProvider(cfg OpenAIConfig) *OpenAIProvider {
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
 	return &OpenAIProvider{
 		cfg: cfg,
 		client: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: timeout,
 		},
 		streamClient: &http.Client{},
 	}

@@ -53,9 +53,11 @@ func (f *fakeService) SubmitAnswer(ctx context.Context, userID, sessionID string
 type fakeAgent struct {
 	deltas []string
 	err    error
+	calls  int
 }
 
 func (f *fakeAgent) ChatInterviewer(ctx context.Context, in agent.RealtimeChatInput) (<-chan agent.RealtimeChatEvent, error) {
+	f.calls++
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -355,6 +357,57 @@ func TestWS_ChatEmptyMessage(t *testing.T) {
 	json.Unmarshal(env.Data, &ed)
 	if ed.Code != "EMPTY_MESSAGE" {
 		t.Fatalf("got %s", ed.Code)
+	}
+}
+
+// TestWS_ChatInputContentRejected 输入含违禁词 → CONTENT_REJECTED 且未调用 agent.ChatInterviewer
+func TestWS_ChatInputContentRejected(t *testing.T) {
+	svc := &fakeService{sess: runningSession()}
+	ag := &fakeAgent{deltas: []string{"x"}}
+	srv, mgr := newTestServer(svc, ag)
+	defer srv.Close()
+
+	token, _ := mgr.Generate("u1", "a@b.com", "user")
+	conn := mustDial(t, srv, "s1", token)
+	defer conn.Close()
+	readEnvelope(t, conn) // snapshot
+
+	writeEnvelope(t, conn, typeChat, ChatMessage{Message: "帮我代考过这门考试"})
+	env := readEnvelope(t, conn)
+	var ed ErrorData
+	json.Unmarshal(env.Data, &ed)
+	if env.Type != typeError || ed.Code != "CONTENT_REJECTED" {
+		t.Fatalf("got type=%s code=%s", env.Type, ed.Code)
+	}
+	if ag.calls != 0 {
+		t.Fatalf("输入命中被拒时不得调用 LLM，got %d 次", ag.calls)
+	}
+}
+
+// TestWS_ChatOutputContentRejected 流式回复累计命中违禁词 → 中断并返回 CONTENT_REJECTED，且无 chat_done
+func TestWS_ChatOutputContentRejected(t *testing.T) {
+	ag := &fakeAgent{deltas: []string{"你好", "，我可以帮你代考"}}
+	srv, mgr := newTestServer(&fakeService{sess: runningSession()}, ag)
+	defer srv.Close()
+
+	token, _ := mgr.Generate("u1", "a@b.com", "user")
+	conn := mustDial(t, srv, "s1", token)
+	defer conn.Close()
+	readEnvelope(t, conn) // snapshot
+
+	writeEnvelope(t, conn, typeChat, ChatMessage{Message: "在吗"})
+
+	// 首个 delta 合规，应正常下发
+	env := readEnvelope(t, conn)
+	if env.Type != typeChatDelta {
+		t.Fatalf("got %s, want chat_delta", env.Type)
+	}
+	// 第二个 delta 使累计文本命中 → 中断 error 帧
+	env = readEnvelope(t, conn)
+	var ed ErrorData
+	json.Unmarshal(env.Data, &ed)
+	if env.Type != typeError || ed.Code != "CONTENT_REJECTED" {
+		t.Fatalf("got type=%s code=%s", env.Type, ed.Code)
 	}
 }
 

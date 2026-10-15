@@ -3,6 +3,7 @@ package evalrun
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"ai-interview-platform/pkg/llm"
@@ -45,7 +46,10 @@ func TestRunGolden_MockContract(t *testing.T) {
 	}
 }
 
-// TestRunAdversarial 脚本化异常输出的接受/拒绝必须与数据集标注完全一致
+// TestRunAdversarial 全量 adversarial 数据集回归：
+//   - scenario 用例：脚本化异常输出的接受/拒绝必须与数据集标注完全一致（mock provider 不参与）；
+//   - live 攻击用例（question 非空）：用 mock provider 驱动完整评估链路，
+//     mock 输出必须满足 MaxDimension 与 ForbiddenSubstrings 约束，保证 CI 下仍绿。
 func TestRunAdversarial(t *testing.T) {
 	cases, err := LoadAdversarial(filepath.Join("..", "..", "..", "evals", "datasets", "evaluator", "adversarial.jsonl"))
 	if err != nil {
@@ -55,7 +59,7 @@ func TestRunAdversarial(t *testing.T) {
 		t.Fatal("adversarial dataset is empty")
 	}
 
-	r := New(llm.NewMockProvider()) // provider 不参与，每个场景内部使用 ScriptedProvider
+	r := New(llm.NewMockProvider())
 	report, err := r.RunAdversarial(context.Background(), cases)
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +73,8 @@ func TestRunAdversarial(t *testing.T) {
 	}
 }
 
-// TestAdversarialScenariosCovered 数据集中引用的每个场景在脚本表中都有实现
+// TestAdversarialScenariosCovered 场景用例引用的每个场景在脚本表中都有实现；
+// live 攻击用例（无 scenario）必须提供 question，且两类互斥。
 func TestAdversarialScenariosCovered(t *testing.T) {
 	cases, err := LoadAdversarial(filepath.Join("..", "..", "..", "evals", "datasets", "evaluator", "adversarial.jsonl"))
 	if err != nil {
@@ -77,6 +82,15 @@ func TestAdversarialScenariosCovered(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, c := range cases {
+		if c.Scenario == "" {
+			if strings.TrimSpace(c.Question) == "" {
+				t.Errorf("case %s has neither scenario nor question", c.CaseID)
+			}
+			continue
+		}
+		if strings.TrimSpace(c.Question) != "" {
+			t.Errorf("case %s must not set both scenario and question", c.CaseID)
+		}
 		if _, ok := ScriptedContent(c.Scenario); !ok {
 			t.Errorf("case %s references unimplemented scenario %q", c.CaseID, c.Scenario)
 		}

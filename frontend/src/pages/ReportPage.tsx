@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { evaluationApi, reportApi } from '../api/endpoints'
+import { evaluationApi, interviewApi, reportApi } from '../api/endpoints'
 import { ApiError } from '../api/client'
 import { TaskFailedError, waitForTask } from '../api/taskPolling'
-import type { Evaluation, Report } from '../api/types'
+import { DisclaimerNotice } from '../components/DisclaimerNotice'
+import type { AnswerCoaching, Evaluation, InterviewSession, Question, Report } from '../api/types'
 
 type Phase = 'evaluating' | 'generating' | 'done' | 'error'
 
@@ -19,6 +20,8 @@ export default function ReportPage() {
   const [phase, setPhase] = useState<Phase>('evaluating')
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null)
   const [report, setReport] = useState<Report | null>(null)
+  // 逐题详情（questions / expected_points / analysis），仅用于报告页「逐题讲解」增补
+  const [session, setSession] = useState<InterviewSession | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
   // 失败后点击「重新生成」递增 nonce，重新跑一遍评估/报告流水线
   const [nonce, setNonce] = useState(0)
@@ -80,6 +83,23 @@ export default function ReportPage() {
     }
   }, [id, nonce])
 
+  // 独立拉取会话逐题详情：失败/为空只影响「逐题讲解」是否渲染，绝不影响报告主体与 phase
+  useEffect(() => {
+    let cancelled = false
+    setSession(null)
+    interviewApi
+      .get(id)
+      .then((s) => {
+        if (!cancelled) setSession(s)
+      })
+      .catch(() => {
+        // 拿不到逐题详情时整段不渲染，报告照常显示
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [id, nonce])
+
   const retry = () => {
     setErrorMsg('')
     setEvaluation(null)
@@ -116,7 +136,7 @@ export default function ReportPage() {
     )
   }
 
-  return <ReportView report={report} evaluation={evaluation} />
+  return <ReportView report={report} evaluation={evaluation} session={session} />
 }
 
 function scoreColor(score: number): string {
@@ -133,7 +153,7 @@ function scoreGrade(score: number): string {
   return '待提升'
 }
 
-function ReportView({ report, evaluation }: { report: Report; evaluation: Evaluation }) {
+function ReportView({ report, evaluation, session }: { report: Report; evaluation: Evaluation; session: InterviewSession | null }) {
   const dims = evaluation.rubric.dimensions
   const hist = report.capability_profile.history
 
@@ -149,6 +169,10 @@ function ReportView({ report, evaluation }: { report: Report; evaluation: Evalua
           {evaluation.model} · prompt {evaluation.prompt_version}
         </div>
       </header>
+
+      <div style={{ marginBottom: 18 }}>
+        <DisclaimerNotice variant="compact" />
+      </div>
 
       {/* 总分卡 */}
       <section
@@ -260,11 +284,15 @@ function ReportView({ report, evaluation }: { report: Report; evaluation: Evalua
                 <strong>{ev.issue}</strong>
               </div>
               <div className="muted">依据：{ev.evidence}</div>
-              {ev.reference && <div className="dim">参考：{ev.reference}</div>}
+              {/* A5 修复：reference 是「考查知识域」短语而非可验证出处，不得展示为权威参考来源 */}
+              {ev.reference && <div className="dim">知识域：{ev.reference}</div>}
             </div>
           ))}
         </div>
       </section>
+
+      {/* 逐题讲解：参考答案要点 + 回答差距 */}
+      <QuestionReview questions={session?.questions ?? []} />
 
       {/* 建议 */}
       {evaluation.recommendations.length > 0 && (
@@ -358,5 +386,149 @@ function ListCard({
         </ul>
       )}
     </section>
+  )
+}
+
+// 逐题讲解：对照每题参考答案要点，展示回答的命中 / 遗漏 / 错误
+function QuestionReview({ questions }: { questions: Question[] }) {
+  if (questions.length === 0) return null
+  return (
+    <section className="card rise rise-3" style={{ padding: 26, marginBottom: 18 }}>
+      <h2 style={{ fontSize: 18, marginBottom: 6 }}>逐题讲解</h2>
+      <p className="dim" style={{ fontSize: 13, marginBottom: 16 }}>
+        对照每题的参考答案要点，回顾你的回答命中、遗漏与偏差。
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {questions.map((q) => (
+          <QuestionItem key={q.id} q={q} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function QuestionItem({ q }: { q: Question }) {
+  const expected = q.expected_points ?? []
+  const analysis = q.answer?.analysis
+  const correct = analysis?.correct_points ?? []
+  const missing = analysis?.missing_points ?? []
+  const wrong = analysis?.wrong_points ?? []
+  const hasGap = correct.length > 0 || missing.length > 0 || wrong.length > 0
+
+  // 更优答案示范：仅当该题已作答时可用；已有持久化结果则直接展示（报告预生成或此前生成过）
+  const answered = !!q.answer && q.answer.text_content.trim() !== ''
+  const [coachPhase, setCoachPhase] = useState<'idle' | 'loading' | 'done' | 'error'>(
+    q.coaching ? 'done' : 'idle',
+  )
+  const [coaching, setCoaching] = useState<AnswerCoaching | null>(q.coaching ?? null)
+  const [coachError, setCoachError] = useState('')
+
+  const requestCoach = async () => {
+    setCoachPhase('loading')
+    setCoachError('')
+    try {
+      const result = await interviewApi.coach(q.session_id, q.id)
+      setCoaching(result)
+      setCoachPhase('done')
+    } catch (err) {
+      setCoachError(err instanceof ApiError ? err.message : '生成失败，请稍后重试')
+      setCoachPhase('error')
+    }
+  }
+
+  return (
+    <details style={{ borderLeft: '2px solid var(--line-strong)', padding: '6px 0 6px 16px' }}>
+      <summary style={{ cursor: 'pointer', fontSize: 14, lineHeight: 1.7 }}>
+        <span className="tag tag-accent" style={{ marginRight: 8 }}>第 {q.seq} 题</span>
+        {q.question}
+        {q.difficulty && (
+          <span className="tag" style={{ marginLeft: 8, fontSize: 11 }}>
+            难度 {q.difficulty}
+          </span>
+        )}
+      </summary>
+
+      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {expected.length > 0 && (
+          <div>
+            <div className="mono dim" style={{ fontSize: 11, letterSpacing: '0.2em', marginBottom: 6 }}>
+              REFERENCE POINTS · 参考答案要点
+            </div>
+            <ul style={{ marginLeft: 18, lineHeight: 1.9, fontSize: 13.5 }}>
+              {expected.map((p, i) => (
+                <li key={i}>{p}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {!analysis && <p className="dim" style={{ fontSize: 13.5 }}>本题未生成分析</p>}
+
+        {analysis && !hasGap && (
+          <p className="dim" style={{ fontSize: 13.5 }}>你的回答已覆盖全部要点，未发现明显偏差。</p>
+        )}
+
+        {analysis && hasGap && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <GapGroup tone="jade" label="✓ 命中" points={correct} />
+            <GapGroup tone="accent" label="! 遗漏" points={missing} />
+            <GapGroup tone="clay" label="× 错误" points={wrong} />
+          </div>
+        )}
+
+        {answered && (
+          <div>
+            {coachPhase !== 'done' && (
+              <button
+                className="btn btn-ghost"
+                onClick={requestCoach}
+                disabled={coachPhase === 'loading'}
+                style={{ fontSize: 13, padding: '6px 14px' }}
+              >
+                {coachPhase === 'loading' ? '生成中…' : coachPhase === 'error' ? '重试' : '生成更优答案示范'}
+              </button>
+            )}
+            {coachPhase === 'error' && (
+              <p style={{ color: 'var(--clay)', fontSize: 13, marginTop: 8 }}>{coachError}</p>
+            )}
+            {coachPhase === 'done' && coaching && (
+              <div
+                className="card"
+                style={{ padding: '16px 18px', background: 'var(--accent-soft)', border: '1px solid var(--line)' }}
+              >
+                <div className="mono dim" style={{ fontSize: 11, letterSpacing: '0.2em', marginBottom: 8 }}>
+                  IMPROVED ANSWER · 更优答案示范
+                </div>
+                <p style={{ fontSize: 14, lineHeight: 1.9, whiteSpace: 'pre-wrap' }}>{coaching.improved_answer}</p>
+                {coaching.key_changes.length > 0 && (
+                  <ul style={{ margin: '10px 0 0 18px', lineHeight: 1.8, fontSize: 13.5 }}>
+                    {coaching.key_changes.map((c, i) => (
+                      <li key={i}>{c}</li>
+                    ))}
+                  </ul>
+                )}
+                <p className="dim" style={{ fontSize: 12, marginTop: 10 }}>
+                  AI 生成的示范答案，非标准答案，仅供参考。
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </details>
+  )
+}
+
+function GapGroup({ tone, label, points }: { tone: 'jade' | 'accent' | 'clay'; label: string; points: string[] }) {
+  if (points.length === 0) return null
+  return (
+    <div style={{ borderLeft: `2px solid var(--${tone})`, paddingLeft: 12 }}>
+      <div style={{ fontSize: 13, color: `var(--${tone})`, marginBottom: 4 }}>{label}</div>
+      <ul style={{ marginLeft: 18, lineHeight: 1.9, fontSize: 13.5 }}>
+        {points.map((p, i) => (
+          <li key={i}>{p}</li>
+        ))}
+      </ul>
+    </div>
   )
 }

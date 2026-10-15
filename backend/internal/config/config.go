@@ -83,7 +83,8 @@ type LLMConfig struct {
 	APIKey           string
 	BaseURL          string
 	Model            string
-	PriceInputPer1K  float64 // 输入 token 每 1K token 美元单价（0=不计费，仅用于 llm_cost_total 估算）
+	Timeout          time.Duration // 非 streaming 请求超时（LLM_TIMEOUT，默认 60s）
+	PriceInputPer1K  float64       // 输入 token 每 1K token 美元单价（0=不计费，仅用于 llm_cost_total 估算）
 	PriceOutputPer1K float64
 }
 
@@ -172,8 +173,9 @@ func Load() (*Config, error) {
 			UseSSL:    getEnvBool("STORAGE_USE_SSL", false),
 		},
 		JWT: JWTConfig{
-			Secret:     getEnv("JWT_SECRET", "change-me-in-production"),
-			ExpireTime: getEnvDuration("JWT_EXPIRE_TIME", 2*time.Hour),
+			Secret: getEnv("JWT_SECRET", "change-me-in-production"),
+			// Access token 短命：泄露窗口最小化，过期由前端静默刷新无感轮换（refresh 30 天）
+			ExpireTime: getEnvDuration("JWT_EXPIRE_TIME", 15*time.Minute),
 			RefreshTTL: getEnvDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
 			Issuer:     getEnv("JWT_ISSUER", "ai-interview-platform"),
 		},
@@ -182,6 +184,7 @@ func Load() (*Config, error) {
 			APIKey:           getEnv("LLM_API_KEY", ""),
 			BaseURL:          getEnv("LLM_BASE_URL", "https://api.openai.com/v1"),
 			Model:            getEnv("LLM_MODEL", "gpt-4o-mini"),
+			Timeout:          getEnvDuration("LLM_TIMEOUT", 60*time.Second),
 			PriceInputPer1K:  getEnvFloat("LLM_PRICE_INPUT_PER_1K", 0),
 			PriceOutputPer1K: getEnvFloat("LLM_PRICE_OUTPUT_PER_1K", 0),
 		},

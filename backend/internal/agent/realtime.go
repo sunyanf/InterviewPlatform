@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"ai-interview-platform/pkg/llm"
+	"ai-interview-platform/pkg/promptguard"
 )
 
 // realtimeHistoryLimit 实时对话携带的最大历史消息条数（防止上下文滥用）
@@ -25,7 +26,7 @@ type RealtimeChatEvent struct {
 	Err   error
 }
 
-// ChatInterviewer 以面试官身份进行实时流式对话（realtime.interviewer.v1）。
+// ChatInterviewer 以面试官身份进行实时流式对话（realtime.interviewer.v2）。
 // 只产出对话内容：不改变任何会话状态、不持久化（AGENTS.md #10）。
 // Provider 不支持流式能力时返回错误，由调用方决定降级策略。
 func (a *Agent) ChatInterviewer(ctx context.Context, in RealtimeChatInput) (<-chan RealtimeChatEvent, error) {
@@ -38,17 +39,22 @@ func (a *Agent) ChatInterviewer(ctx context.Context, in RealtimeChatInput) (<-ch
 		return nil, fmt.Errorf("llm provider %s does not support streaming", a.llm.Name())
 	}
 
+	// 岗位标题可能来自用户粘贴的 JD，属不可信数据：以数据区形式附加在 system prompt 末尾
 	system := buildSystemPrompt(fmt.Sprintf(
-		"你是一个正在进行%s岗位面试（类型：%s）的专业技术面试官。"+
+		"你是一个正在进行的专业技术面试官（类型：%s）。"+
 			"用简短自然的口语与候选人实时交流，可就候选人的回答即时追问或给予提示；"+
-			"每次回复控制在 150 字以内，直接输出对话内容，不要 JSON，不要复述候选人的话。",
-		in.JobTitle, in.InterviewType,
+			"每次回复控制在 150 字以内，直接输出对话内容，不要 JSON，不要复述候选人的话。\n%s",
+		in.InterviewType, promptguard.Wrap("job_title", in.JobTitle),
 	), PromptRealtimeInterviewer)
 
 	msgs := make([]llm.Message, 0, len(in.History)+2)
 	msgs = append(msgs, llm.Message{Role: "system", Content: system})
 	msgs = append(msgs, sanitizeRealtimeHistory(in.History)...)
-	msgs = append(msgs, llm.Message{Role: "user", Content: strings.TrimSpace(in.Message)})
+	msgs = append(msgs, llm.Message{
+		Role: "user",
+		// 候选人发言为用户原文，包裹为数据区
+		Content: promptguard.Wrap("candidate_answer", strings.TrimSpace(in.Message)),
+	})
 
 	// 上游无 deadline 时施加默认超时，与 agent.chat 保持一致的同步链路保护
 	var cancel context.CancelFunc
@@ -87,7 +93,8 @@ func (a *Agent) ChatInterviewer(ctx context.Context, in RealtimeChatInput) (<-ch
 }
 
 // sanitizeRealtimeHistory 清洗客户端传入的对话历史：
-// 仅保留 user/assistant 角色的非空内容，截断到最近 realtimeHistoryLimit 条
+// 仅保留 user/assistant 角色的非空内容，截断到最近 realtimeHistoryLimit 条；
+// 历史中的候选人发言属不可信数据，包裹为数据区防止历史注入内容被当作指令
 func sanitizeRealtimeHistory(history []llm.Message) []llm.Message {
 	cleaned := make([]llm.Message, 0, len(history))
 	for _, m := range history {
@@ -98,6 +105,9 @@ func sanitizeRealtimeHistory(history []llm.Message) []llm.Message {
 		content := strings.TrimSpace(m.Content)
 		if content == "" {
 			continue
+		}
+		if role == "user" {
+			content = promptguard.Wrap("candidate_answer", content)
 		}
 		cleaned = append(cleaned, llm.Message{Role: role, Content: content})
 	}

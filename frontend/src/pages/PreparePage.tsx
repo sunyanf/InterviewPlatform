@@ -26,6 +26,14 @@ export default function PreparePage() {
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState('')
 
+  // A3 匹配度提示：选中简历后查询与岗位的技能匹配度，低匹配时预警（红队 A3；查询失败静默不阻塞）
+  const { data: match } = useQuery({
+    queryKey: ['match', resumeId, jobId],
+    queryFn: () => resumeApi.match(resumeId, jobId),
+    enabled: !!resumeId && !!jobId,
+    retry: false,
+  })
+
   const handleUpload = async (file: File) => {
     setUploading(true)
     setUploadMsg('')
@@ -153,6 +161,13 @@ export default function PreparePage() {
         </button>
         {uploadMsg && <p style={{ color: 'var(--jade)', fontSize: 13, marginTop: 10 }}>{uploadMsg}</p>}
       </section>
+
+      {/* A3：低匹配预警（提示出题将覆盖岗位要求，可能出现不熟悉的技术栈） */}
+      {match && match.match_score < 40 && (
+        <div className="notice notice-error" style={{ marginBottom: 18 }}>
+          该简历与岗位技能匹配度较低（{Math.round(match.match_score)}%），出题将主要覆盖岗位要求，可能出现你不熟悉的技术栈。
+        </div>
+      )}
 
       {/* 面试配置 */}
       <section className="card rise rise-3" style={{ padding: 26, marginBottom: 22 }}>

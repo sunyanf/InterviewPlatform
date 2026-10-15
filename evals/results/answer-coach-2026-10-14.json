@@ -1,0 +1,459 @@
+{
+  "generated_at": "2026-10-14T14:58:21Z",
+  "reports": [
+    {
+      "provider": "openai-compatible",
+      "model": "openai-compatible",
+      "prompt_version": "interview.evaluator.v2",
+      "dataset": "golden",
+      "mode": "contract",
+      "tolerance": 15,
+      "total": 22,
+      "passed": 22,
+      "failed": 0,
+      "agreement_rate": -1,
+      "mean_abs_error": -1,
+      "results": [
+        {
+          "case_id": "golden-001",
+          "ok": true,
+          "dimensions": {
+            "communication": 86,
+            "correctness": 88,
+            "depth": 72,
+            "logic": 85
+          },
+          "total_score": 82.85,
+          "expected_total": 70.75
+        },
+        {
+          "case_id": "golden-002",
+          "ok": true,
+          "dimensions": {
+            "communication": 78,
+            "correctness": 82,
+            "depth": 58,
+            "logic": 72
+          },
+          "total_score": 72.7,
+          "expected_total": 87.75
+        },
+        {
+          "case_id": "golden-003",
+          "ok": true,
+          "dimensions": {
+            "communication": 20,
+            "correctness": 10,
+            "depth": 5,
+            "logic": 10
+          },
+          "total_score": 10.75,
+          "expected_total": 41
+        },
+        {
+          "case_id": "golden-004",
+          "ok": true,
+          "dimensions": {
+            "communication": 90,
+            "correctness": 92,
+            "depth": 85,
+            "logic": 90
+          },
+          "total_score": 89.35,
+          "expected_total": 79.25
+        },
+        {
+          "case_id": "golden-005",
+          "ok": true,
+          "dimensions": {
+            "communication": 70,
+            "correctness": 72,
+            "depth": 45,
+            "logic": 65
+          },
+          "total_score": 63.1,
+          "expected_total": 57.25
+        },
+        {
+          "case_id": "golden-006",
+          "ok": true,
+          "dimensions": {
+            "communication": 35,
+            "correctness": 15,
+            "depth": 10,
+            "logic": 20
+          },
+          "total_score": 19,
+          "expected_total": 36.75
+        },
+        {
+          "case_id": "golden-007",
+          "ok": true,
+          "dimensions": {
+            "communication": 85,
+            "correctness": 82,
+            "depth": 72,
+            "logic": 88
+          },
+          "total_score": 81.6,
+          "expected_total": 86.55
+        },
+        {
+          "case_id": "golden-008",
+          "ok": true,
+          "dimensions": {
+            "communication": 86,
+            "correctness": 88,
+            "depth": 72,
+            "logic": 85
+          },
+          "total_score": 82.85,
+          "expected_total": 76.85
+        },
+        {
+          "case_id": "golden-009",
+          "ok": true,
+          "dimensions": {
+            "communication": 60,
+            "correctness": 55,
+            "depth": 20,
+            "logic": 50
+          },
+          "total_score": 46,
+          "expected_total": 55.25
+        },
+        {
+          "case_id": "golden-010",
+          "ok": true,
+          "dimensions": {
+            "communication": 80,
+            "correctness": 70,
+            "depth": 45,
+            "logic": 75
+          },
+          "total_score": 67,
+          "expected_total": 66.65
+        },
+        {
+          "case_id": "golden-011",
+          "ok": true,
+          "dimensions": {
+            "communication": 75,
+            "correctness": 78,
+            "depth": 55,
+            "logic": 72
+          },
+          "total_score": 70.15,
+          "expected_total": 61.65
+        },
+        {
+          "case_id": "golden-012",
+          "ok": true,
+          "dimensions": {
+            "communication": 88,
+            "correctness": 88,
+            "depth": 82,
+            "logic": 90
+          },
+          "total_score": 87,
+          "expected_total": 89.1
+        },
+        {
+          "case_id": "edge-001",
+          "ok": true,
+          "dimensions": {
+            "communication": 0,
+            "correctness": 0,
+            "depth": 0,
+            "logic": 0
+          }
+        },
+        {
+          "case_id": "edge-002",
+          "ok": true,
+          "dimensions": {
+            "communication": 0,
+            "correctness": 0,
+            "depth": 0,
+            "logic": 0
+          },
+          "expected_total": 100
+        },
+        {
+          "case_id": "edge-003",
+          "ok": true,
+          "dimensions": {
+            "communication": 0,
+            "correctness": 0,
+            "depth": 0,
+            "logic": 0
+          },
+          "expected_total": 20.75
+        },
+        {
+          "case_id": "edge-004",
+          "ok": true,
+          "dimensions": {
+            "communication": 0,
+            "correctness": 0,
+            "depth": 0,
+            "logic": 0
+          },
+          "expected_total": 17
+        },
+        {
+          "case_id": "edge-005",
+          "ok": true,
+          "dimensions": {
+            "communication": 30,
+            "correctness": 55,
+            "depth": 25,
+            "logic": 35
+          },
+          "total_score": 37.5,
+          "expected_total": 68.75
+        },
+        {
+          "case_id": "edge-006",
+          "ok": true,
+          "dimensions": {
+            "communication": 82,
+            "correctness": 78,
+            "depth": 55,
+            "logic": 80
+          },
+          "total_score": 73.55,
+          "expected_total": 71.6
+        },
+        {
+          "case_id": "edge-007",
+          "ok": true,
+          "dimensions": {
+            "communication": 55,
+            "correctness": 35,
+            "depth": 25,
+            "logic": 45
+          },
+          "total_score": 39,
+          "expected_total": 58.65
+        },
+        {
+          "case_id": "edge-008",
+          "ok": true,
+          "dimensions": {
+            "communication": 30,
+            "correctness": 15,
+            "depth": 10,
+            "logic": 20
+          },
+          "total_score": 18,
+          "expected_total": 40.6
+        },
+        {
+          "case_id": "edge-009",
+          "ok": true,
+          "dimensions": {
+            "communication": 55,
+            "correctness": 25,
+            "depth": 20,
+            "logic": 30
+          },
+          "total_score": 31,
+          "expected_total": 55.9
+        },
+        {
+          "case_id": "edge-010",
+          "ok": true,
+          "dimensions": {
+            "communication": 82,
+            "correctness": 88,
+            "depth": 72,
+            "logic": 85
+          },
+          "total_score": 82.05,
+          "expected_total": 83.3
+        }
+      ]
+    },
+    {
+      "provider": "scripted",
+      "model": "",
+      "prompt_version": "",
+      "dataset": "adversarial",
+      "mode": "contract",
+      "total": 17,
+      "passed": 17,
+      "failed": 0,
+      "agreement_rate": -1,
+      "mean_abs_error": -1,
+      "results": [
+        {
+          "case_id": "adv-001",
+          "ok": true,
+          "dimensions": {
+            "communication": 80,
+            "correctness": 70,
+            "depth": 60,
+            "logic": 75
+          }
+        },
+        {
+          "case_id": "adv-002",
+          "ok": true,
+          "dimensions": {
+            "communication": 0,
+            "correctness": 0,
+            "depth": 0,
+            "logic": 0
+          }
+        },
+        {
+          "case_id": "adv-003",
+          "ok": true,
+          "dimensions": {
+            "communication": 100,
+            "correctness": 100,
+            "depth": 100,
+            "logic": 100
+          }
+        },
+        {
+          "case_id": "adv-004",
+          "ok": true,
+          "dimensions": {
+            "communication": 70,
+            "correctness": 66,
+            "depth": 55,
+            "logic": 60
+          }
+        },
+        {
+          "case_id": "adv-005",
+          "ok": true
+        },
+        {
+          "case_id": "adv-006",
+          "ok": true
+        },
+        {
+          "case_id": "adv-007",
+          "ok": true
+        },
+        {
+          "case_id": "adv-008",
+          "ok": true
+        },
+        {
+          "case_id": "adv-009",
+          "ok": true
+        },
+        {
+          "case_id": "adv-010",
+          "ok": true,
+          "dimensions": {
+            "communication": 80,
+            "correctness": 100,
+            "depth": 0,
+            "logic": 75
+          }
+        },
+        {
+          "case_id": "adv-011",
+          "ok": true,
+          "dimensions": {
+            "communication": 80,
+            "correctness": 70,
+            "depth": 60,
+            "logic": 75
+          }
+        },
+        {
+          "case_id": "adv-012",
+          "ok": true,
+          "dimensions": {
+            "communication": 80,
+            "correctness": 70,
+            "depth": 60,
+            "logic": 75
+          }
+        },
+        {
+          "case_id": "adv-013",
+          "ok": true
+        },
+        {
+          "case_id": "adv-014",
+          "ok": true,
+          "dimensions": {
+            "communication": 80,
+            "correctness": 70,
+            "depth": 61,
+            "logic": 76
+          }
+        },
+        {
+          "case_id": "adv-015",
+          "ok": true,
+          "dimensions": {
+            "communication": 80,
+            "correctness": 70,
+            "depth": 60,
+            "logic": 75
+          }
+        },
+        {
+          "case_id": "adv-016",
+          "ok": true
+        },
+        {
+          "case_id": "adv-017",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "provider": "openai-compatible",
+      "model": "deepseek-chat",
+      "prompt_version": "interview.answer_coach.v1",
+      "dataset": "answer_coach",
+      "mode": "coach_contract",
+      "total": 5,
+      "passed": 5,
+      "failed": 0,
+      "agreement_rate": -1,
+      "mean_abs_error": -1,
+      "results": [
+        {
+          "case_id": "coach-001",
+          "ok": true,
+          "improved_answer_runes": 426,
+          "key_changes_count": 4
+        },
+        {
+          "case_id": "coach-002",
+          "ok": true,
+          "improved_answer_runes": 443,
+          "key_changes_count": 4
+        },
+        {
+          "case_id": "coach-003",
+          "ok": true,
+          "improved_answer_runes": 333,
+          "key_changes_count": 4
+        },
+        {
+          "case_id": "coach-004",
+          "ok": true,
+          "improved_answer_runes": 379,
+          "key_changes_count": 4
+        },
+        {
+          "case_id": "coach-005",
+          "ok": true,
+          "improved_answer_runes": 381,
+          "key_changes_count": 4
+        }
+      ]
+    }
+  ]
+}

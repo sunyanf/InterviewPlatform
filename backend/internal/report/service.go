@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"ai-interview-platform/internal/agent"
 	"ai-interview-platform/internal/evaluation"
 	"ai-interview-platform/internal/interview"
 	"ai-interview-platform/internal/task"
+	"ai-interview-platform/pkg/contentguard"
 	apperrors "ai-interview-platform/pkg/errors"
 	"ai-interview-platform/pkg/metrics"
 )
@@ -95,6 +97,10 @@ func (s *Service) RunGenerateTask(ctx context.Context, raw json.RawMessage) erro
 // 数据流：评估（确定性总分/维度分）→ 能力画像 + 历史对比（确定性计算）
 //
 //	→ 知识缺口聚合（确定性）→ LLM 学习计划（只产建议，不算分）→ 落库
+//	→ 逐题预生成「更优答案示范」并落库（尽力而为，失败不影响报告）
+//
+// 逐题预生成段依赖具体 *interview.Repository，不纳入单测（无法以 fake 替换）；
+// 缓存命中 / 审核替换 / 落库等核心逻辑由 interview 层用例覆盖（service_test.go）。
 func (s *Service) Generate(ctx context.Context, userID, sessionID string) (*Report, error) {
 	if sessionID == "" {
 		return nil, apperrors.New("BAD_REQUEST", "会话 ID 不能为空", 400)
@@ -165,6 +171,10 @@ func (s *Service) Generate(ctx context.Context, userID, sessionID string) (*Repo
 		return nil, apperrors.Wrap("REPORT_FAILED", "生成学习计划失败，可稍后重试", 500, err)
 	}
 
+	// 输出侧内容安全审核：LLM 偶发脏输出不应导致整场报告失败。
+	// 命中条目替换为中性占位并写审计，其余条目保留；空/长度为零的数组保持原样。
+	s.sanitizeLearningPlan(planOutput, sessionID)
+
 	rp := &Report{
 		SessionID:  sessionID,
 		UserID:     userID,
@@ -188,6 +198,60 @@ func (s *Service) Generate(ctx context.Context, userID, sessionID string) (*Repo
 		s.log.Error("save report failed", "session_id", sessionID, "error", err)
 		return nil, apperrors.Wrap("INTERNAL_ERROR", "保存报告失败", 500, err)
 	}
+
+	// 报告落库成功后，逐题预生成「更优答案示范」（顺序执行，不新增任何 goroutine）。
+	// 答案不可变 → 持久化的示范结果永久复用；报告重跑时已生成的题目直接跳过（省成本）。
+	// 单题任何失败只记日志与指标并继续，绝不影响已落库的整场报告。
+	jobTitle := sess.JobTitle // Repository.GetByID 不填充 JobTitle，与 interview 层输入组装保持一致需显式查询
+	if t, err := s.interviewRepo.GetJobTitle(ctx, sess.JobID); err != nil {
+		s.log.Warn("get job title for coaching failed", "session_id", sessionID, "job_id", sess.JobID, "error", err)
+	} else {
+		jobTitle = t
+	}
+	var generated, skipped, failed int
+	for i := range questions {
+		q := &questions[i]
+		if q.Answer == nil || strings.TrimSpace(q.Answer.TextContent) == "" {
+			continue
+		}
+		existing, err := s.interviewRepo.GetCoachingByQuestionID(ctx, q.ID)
+		if err != nil {
+			s.log.Warn("get coaching failed", "session_id", sessionID, "question_id", q.ID, "error", err)
+			metrics.AgentFailures.Inc("coach_answer")
+			failed++
+			continue
+		}
+		if existing != nil {
+			skipped++
+			continue
+		}
+		coaching, err := s.agent.CoachAnswer(ctx, agent.AnswerCoachInput{
+			JobTitle:       jobTitle,
+			Question:       q.Question,
+			ExpectedPoints: q.ExpectedPoints,
+			AnswerText:     q.Answer.TextContent,
+			Difficulty:     q.Difficulty,
+			Analysis:       q.Answer.Analysis,
+		})
+		if err != nil {
+			s.log.Warn("agent coach answer failed", "session_id", sessionID, "question_id", q.ID, "error", err)
+			metrics.AgentFailures.Inc("coach_answer")
+			failed++
+			continue
+		}
+		// 输出侧内容安全审核（与 interview 层同一实现）：命中条目替换为中性占位
+		interview.SanitizeCoaching(coaching, sessionID, s.log)
+		if err := s.interviewRepo.UpsertCoaching(ctx, sessionID, q.ID, coaching); err != nil {
+			s.log.Warn("save coaching failed", "session_id", sessionID, "question_id", q.ID, "error", err)
+			metrics.AgentFailures.Inc("coach_answer")
+			failed++
+			continue
+		}
+		generated++
+	}
+	// 汇总日志只记计数，不含任何题目/回答/示范内容（AGENTS.md #17）
+	s.log.Info("coaching pre-generated", "session_id", sessionID,
+		"generated", generated, "skipped", skipped, "failed", failed)
 
 	s.log.Info("report generated", "session_id", sessionID, "total_score", rp.TotalScore,
 		"history_count", historyCount(history), "prompt_version", rp.PromptVersion)
@@ -249,4 +313,52 @@ func historyCount(h *HistoryComparison) int {
 		return 0
 	}
 	return h.ComparedCount
+}
+
+// neutralPlaceholder 报告产物命中内容安全规则时的中性占位文案
+const neutralPlaceholder = "（该条内容未通过安全校验，已隐藏）"
+
+// sanitizeLearningPlan 对 LLM 学习计划的自由文本字段做输出侧审核：
+// 命中条目替换为中性占位（不因个别条目命中让整场报告失败），其余条目保留；
+// 空/长度为零的数组保持原样。审计日志只记字段、类别与规则，不回显内容。
+func (s *Service) sanitizeLearningPlan(out *agent.LearningPlanOutput, sessionID string) {
+	if out == nil {
+		return
+	}
+	s.sanitizeList(sessionID, "strengths", out.Strengths)
+	s.sanitizeList(sessionID, "weaknesses", out.Weaknesses)
+	for i := range out.FocusAreas {
+		fa := &out.FocusAreas[i]
+		if v := contentguard.Check(fa.Topic); !v.Allowed {
+			s.logReportRejected(sessionID, "focus_areas.topic", v)
+			fa.Topic = neutralPlaceholder
+		}
+		if v := contentguard.Check(fa.Reason); !v.Allowed {
+			s.logReportRejected(sessionID, "focus_areas.reason", v)
+			fa.Reason = neutralPlaceholder
+		}
+		s.sanitizeList(sessionID, "focus_areas.suggestions", fa.Suggestions)
+	}
+	if v := contentguard.Check(out.NextTraining.Focus); !v.Allowed {
+		s.logReportRejected(sessionID, "next_training.focus", v)
+		out.NextTraining.Focus = neutralPlaceholder
+	}
+	s.sanitizeList(sessionID, "next_training.suggested_topics", out.NextTraining.SuggestedTopics)
+}
+
+// sanitizeList 逐条审核字符串列表，命中条目原地替换为中性占位（空/零长度保持原样）
+func (s *Service) sanitizeList(sessionID, field string, items []string) {
+	for i, item := range items {
+		if v := contentguard.Check(item); !v.Allowed {
+			s.logReportRejected(sessionID, field, v)
+			items[i] = neutralPlaceholder
+		}
+	}
+}
+
+// logReportRejected 报告输出侧命中审计（不记录原文）
+func (s *Service) logReportRejected(sessionID, field string, v contentguard.Verdict) {
+	s.log.Warn("report output rejected",
+		"scope", "report_output", "session_id", sessionID, "field", field,
+		"category", v.Category, "rule_id", v.RuleID)
 }

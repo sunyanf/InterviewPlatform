@@ -2,8 +2,11 @@ package job
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"unicode/utf8"
 
+	"ai-interview-platform/pkg/contentguard"
 	apperrors "ai-interview-platform/pkg/errors"
 )
 
@@ -34,6 +37,32 @@ func (s *Service) CreateJob(ctx context.Context, req CreateJobRequest) (*Job, er
 	}
 	if req.CategoryID == "" {
 		return nil, apperrors.New("INVALID_CATEGORY", "请选择岗位分类", 400)
+	}
+
+	// 输入侧内容安全审核：标题/描述/来源任一字段命中即拒绝；
+	// 要求/技能为数组，任一元素命中即拒绝。日志只记类别与规则，不回显岗位原文。
+	for _, f := range []struct {
+		name string
+		text string
+	}{{"title", req.Title}, {"description", req.Description}, {"source", req.Source}} {
+		if v := contentguard.Check(f.text); !v.Allowed {
+			s.log.Warn("job content rejected",
+				"scope", "job_create", "field", f.name,
+				"category", v.Category, "rule_id", v.RuleID, "text_runes", utf8.RuneCountInString(f.text))
+			return nil, jobContentRejected(v)
+		}
+	}
+	if v := contentguard.CheckList(req.Requirements); !v.Allowed {
+		s.log.Warn("job content rejected",
+			"scope", "job_create", "field", "requirements",
+			"category", v.Category, "rule_id", v.RuleID, "text_runes", totalRunes(req.Requirements))
+		return nil, jobContentRejected(v)
+	}
+	if v := contentguard.CheckList(req.Skills); !v.Allowed {
+		s.log.Warn("job content rejected",
+			"scope", "job_create", "field", "skills",
+			"category", v.Category, "rule_id", v.RuleID, "text_runes", totalRunes(req.Skills))
+		return nil, jobContentRejected(v)
 	}
 
 	j := &Job{
@@ -97,4 +126,19 @@ func (s *Service) ListJobs(ctx context.Context, req ListJobsRequest) ([]Job, int
 		list = []Job{} // 空结果输出 []，避免前端拿到 null
 	}
 	return list, total, nil
+}
+
+// jobContentRejected 岗位内容命中内容安全规则的统一业务错误（HTTP 400）
+func jobContentRejected(v contentguard.Verdict) error {
+	return apperrors.New("CONTENT_REJECTED",
+		fmt.Sprintf("岗位信息包含%s内容，请修改后重试", contentguard.CategoryLabel(v.Category)), 400)
+}
+
+// totalRunes 统计字符串列表的总字符数（仅用于审计日志字段，不含敏感业务判断）
+func totalRunes(items []string) int {
+	n := 0
+	for _, s := range items {
+		n += utf8.RuneCountInString(s)
+	}
+	return n
 }

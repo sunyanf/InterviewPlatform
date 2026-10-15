@@ -63,6 +63,9 @@ export default function LoginPage() {
         <button className="btn btn-primary" disabled={busy} style={{ marginTop: 4 }}>
           {busy ? <span className="spinner" /> : '进入面试室'}
         </button>
+        <p className="dim" style={{ fontSize: 12.5, textAlign: 'center', lineHeight: 1.7 }}>
+          登录即表示同意<Link to="/legal/terms">《用户协议》</Link>与<Link to="/legal/privacy">《隐私政策》</Link>
+        </p>
         <p className="dim" style={{ fontSize: 13.5, textAlign: 'center' }}>
           还没有账号？<Link to="/register">注册一个</Link>
         </p>

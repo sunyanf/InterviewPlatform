@@ -8,13 +8,16 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"ai-interview-platform/internal/job"
 	"ai-interview-platform/internal/task"
+	"ai-interview-platform/pkg/contentguard"
 	apperrors "ai-interview-platform/pkg/errors"
 	"ai-interview-platform/pkg/llm"
+	"ai-interview-platform/pkg/promptguard"
 	"ai-interview-platform/pkg/resumeparse"
 	"ai-interview-platform/pkg/storage"
 )
@@ -32,9 +35,18 @@ type taskEnqueuer interface {
 	Enqueue(ctx context.Context, req task.EnqueueRequest) (*task.Task, bool, error)
 }
 
+// resumeRepo 简历数据访问能力（*Repository 实现；测试可用 fake 替换）
+type resumeRepo interface {
+	Create(ctx context.Context, rs *Resume) error
+	GetByID(ctx context.Context, id string) (*Resume, error)
+	ListByUserID(ctx context.Context, userID string) ([]Resume, error)
+	UpdateParseResult(ctx context.Context, id, parsedContent string, structuredData any, skills []string, status string) error
+	UpdateStatus(ctx context.Context, id, status string) error
+}
+
 // Service 简历业务逻辑层
 type Service struct {
-	repo    *Repository
+	repo    resumeRepo
 	storage storage.Storage
 	llm     llm.Provider
 	jobRepo *job.Repository
@@ -55,6 +67,9 @@ func NewService(repo *Repository, st storage.Storage, llmProv llm.Provider, jobR
 }
 
 const maxFileSize = 10 * 1024 * 1024 // 10MB
+
+// resumeContentMaxRunes 简历正文内容审核的长度上限（简历较长，放宽至 5 万字符）
+const resumeContentMaxRunes = 50000
 
 var allowedFileTypes = map[string]bool{
 	".txt":  true,
@@ -174,6 +189,17 @@ func (s *Service) Parse(ctx context.Context, resumeID string) (*Resume, error) {
 		return nil, apperrors.New("EMPTY_CONTENT", "简历内容为空或无法提取", 400)
 	}
 
+	// 输入侧内容安全审核：命中即拒绝，并置解析失败（与既有失败路径一致）。
+	// 简历正文较长，使用放宽的长度上限；日志只记类别与规则，不回显简历原文。
+	if v := contentguard.CheckLimited(text, resumeContentMaxRunes); !v.Allowed {
+		s.log.Warn("resume content rejected",
+			"scope", "resume_parse", "resume_id", resumeID,
+			"category", v.Category, "rule_id", v.RuleID, "text_runes", utf8.RuneCountInString(text))
+		_ = s.repo.UpdateParseResult(ctx, resumeID, "", nil, []string{}, StatusFailed)
+		return nil, apperrors.New("CONTENT_REJECTED",
+			fmt.Sprintf("简历包含%s内容，无法解析，请修改后重新上传", contentguard.CategoryLabel(v.Category)), 400)
+	}
+
 	// 调用 LLM 结构化解析
 	structured, err := s.parseWithLLM(ctx, text)
 	if err != nil {
@@ -199,6 +225,7 @@ func (s *Service) Parse(ctx context.Context, resumeID string) (*Resume, error) {
 
 // parseWithLLM 调用 LLM 将简历文本解析为结构化数据
 func (s *Service) parseWithLLM(ctx context.Context, text string) (*StructuredResume, error) {
+	// 简历原文属不可信输入：包裹为数据区，并在 system 声明其中的文字不得改变解析规则
 	prompt := fmt.Sprintf(`你是一个简历解析助手。请从以下简历文本中提取结构化信息，以 JSON 格式返回。
 
 要求：
@@ -208,11 +235,11 @@ func (s *Service) parseWithLLM(ctx context.Context, text string) (*StructuredRes
 4. 如果某项信息不存在，填空字符串或空数组
 
 简历文本：
-%s`, text)
+%s`, promptguard.Wrap("resume", text))
 
 	resp, err := s.llm.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{
-			{Role: "system", Content: "你是一个专业的简历解析助手，只输出 JSON。"},
+			{Role: "system", Content: "你是一个专业的简历解析助手，只输出 JSON。" + promptguard.IsolationClause},
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.1,

@@ -17,6 +17,7 @@ func NewProvider(cfg config.LLMConfig) (Provider, error) {
 			APIKey:  cfg.APIKey,
 			BaseURL: cfg.BaseURL,
 			Model:   cfg.Model,
+			Timeout: cfg.Timeout,
 		}), nil
 	case "mock", "":
 		return NewMockProvider(), nil
